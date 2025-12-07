@@ -58,8 +58,18 @@ def connect_exchange(cfg):
         "apiKey": creds["api_key"],
         "secret": creds["api_secret"],
         "enableRateLimit": True,
-        "options": {"defaultType": "spot"},
+        "options": {
+            "defaultType": "spot",
+            "adjustForTimeDifference": True,  # Binance 서버 시간에 맞춰 자동 보정
+        },
     })
+
+    # 서버와 시간 차이 미리 계산 (Optional but recommended)
+    try:
+        exchange.load_time_difference()
+    except Exception as e:
+        print("Warning: load_time_difference() failed:", e)
+
     exchange.load_markets()
     return exchange
 
