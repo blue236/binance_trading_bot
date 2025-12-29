@@ -3,3 +3,5 @@
 logs/
 state.json
 config.yaml
+.credentials.json
+credentials.json

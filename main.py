@@ -10,6 +10,7 @@ import ccxt
 from ta.volatility import AverageTrueRange, BollingerBands
 from ta.trend import EMAIndicator, ADXIndicator
 from ta.momentum import RSIIndicator
+from credentials import load_or_prompt_credentials
 
 # Optional Telegram
 try:
@@ -17,9 +18,24 @@ try:
 except Exception:
     Bot = None
 
+def apply_credentials(cfg, creds):
+    cfg.setdefault("credentials", {})
+    cfg.setdefault("alerts", {})
+    if not cfg["credentials"].get("api_key"):
+        cfg["credentials"]["api_key"] = creds.get("api_key", "")
+    if not cfg["credentials"].get("api_secret"):
+        cfg["credentials"]["api_secret"] = creds.get("api_secret", "")
+    if not cfg["alerts"].get("telegram_bot_token"):
+        cfg["alerts"]["telegram_bot_token"] = creds.get("telegram_bot_token", "")
+    if not cfg["alerts"].get("telegram_chat_id"):
+        cfg["alerts"]["telegram_chat_id"] = creds.get("telegram_chat_id", "")
+    return cfg
+
 def load_config(path="config.yaml"):
     with open(path, "r") as f:
         cfg = yaml.safe_load(f) or {}
+    creds = load_or_prompt_credentials()
+    cfg = apply_credentials(cfg, creds)
     return cfg
 
 def apply_env_overrides(cfg):
