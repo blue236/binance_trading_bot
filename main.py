@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import os, sys, time, json, math, traceback
+import os, sys, time, json, math, traceback, logging
 import pandas as pd
 import numpy as np
 import yaml
@@ -60,6 +60,22 @@ def now_tz(tz_name):
 
 def ensure_dir(path):
     os.makedirs(path, exist_ok=True)
+
+def setup_logger(log_dir, name="bot.log"):
+    ensure_dir(log_dir)
+    logger = logging.getLogger("bot")
+    if logger.handlers:
+        return logger
+    logger.setLevel(logging.INFO)
+    fpath = os.path.join(log_dir, name)
+    fmt = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
+    fh = logging.FileHandler(fpath)
+    fh.setFormatter(fmt)
+    logger.addHandler(fh)
+    sh = logging.StreamHandler(sys.stdout)
+    sh.setFormatter(fmt)
+    logger.addHandler(sh)
+    return logger
 
 def read_state(path):
     if os.path.exists(path):
@@ -295,6 +311,7 @@ def main():
     state_path = cfg["logging"]["state_file"]
     os.makedirs(csv_dir, exist_ok=True)
 
+    logger = setup_logger(cfg["logging"]["csv_dir"])
     exchange = connect_exchange(cfg)
     tg = connect_telegram(cfg)
 
@@ -303,6 +320,7 @@ def main():
     session_date = daily_key(now_tz(tzname))
     base_ccy = cfg["general"]["base_currency"]
     equity_start = fetch_equity_usdt(exchange, base_ccy)
+    logger.info("Bot started. dry_run=%s", cfg["general"]["dry_run"])
     if tg:
         try: tg[0].send_message(chat_id=tg[1], text=f"🚀 Bot started. Equity start: {equity_start:.2f} {cfg['general']['base_currency']} (dry_run={cfg['general']['dry_run']})")
         except: pass
@@ -315,6 +333,7 @@ def main():
             if dk != session_date:
                 session_date = dk
                 equity_start = fetch_equity_usdt(exchange, cfg["general"]["base_currency"])
+                logger.info("New session %s. Equity start %.2f %s", session_date, equity_start, base_ccy)
                 if tg:
                     try: tg[0].send_message(chat_id=tg[1], text=f"📅 New session {session_date}. Equity start: {equity_start:.2f}")
                     except: pass
@@ -328,6 +347,7 @@ def main():
             balances_free = balances.get("free", {})
             equity_now = fetch_equity_usdt(exchange, base_ccy, balances_total, tickers)
             if daily_pnl_guard(cfg, equity_now, equity_start):
+                logger.warning("Daily loss stop reached. Equity %.2f vs start %.2f", equity_now, equity_start)
                 if tg:
                     try: tg[0].send_message(chat_id=tg[1], text=f"⛔ Daily loss stop reached. Equity {equity_now:.2f} vs start {equity_start:.2f}. Cooling 60m.")
                     except: pass
@@ -378,6 +398,7 @@ def main():
                         "ts": loop_ts.isoformat(), "event":"ENTER", "symbol":symbol, "side":"LONG",
                         "price": price, "qty": qty, "sl": sl, "signal": signal, "regime": regime, "equity": equity_now, "adx_d": adx_val
                     }, fieldnames=TRADE_FIELDS)
+                    logger.info("ENTER %s %s qty=%s price=%.4f sl=%.4f regime=%s", symbol, signal, qty, price, sl, regime)
                     if tg:
                         try: tg[0].send_message(chat_id=tg[1], text=f"🟢 ENTER {symbol} {signal} qty={qty} @ {price:.4f} SL={sl:.4f} regime={regime}")
                         except: pass
@@ -406,6 +427,7 @@ def main():
                     et = datetime.fromisoformat(pos["entry_time"])
                     if loop_ts - et >= timedelta(hours=cfg["strategy"]["mean_reversion_time_stop_hours"]):
                         place_order(exchange, sym, "sell", qty, price=last, dry_run=cfg["general"]["dry_run"])
+                        logger.info("EXIT %s reason=TIME_STOP qty=%s price=%.4f", sym, qty, last)
                         finalize_exit(cfg, state, state_path, csv_dir, tg, sym, "TIME_STOP", last, qty)
                         continue
                     if "tp_mid" in pos and last >= pos["tp_mid"]:
@@ -413,11 +435,13 @@ def main():
                         if order_constraints_ok(exchange, sym, sell_qty, last, cfg["general"]["min_notional_usdt"]):
                             place_order(exchange, sym, "sell", sell_qty, price=last, dry_run=cfg["general"]["dry_run"])
                             pos["qty"] = float(qty - sell_qty); del pos["tp_mid"]; changed = True
+                            logger.info("PARTIAL_TP %s qty=%s price=%.4f note=mid-band", sym, sell_qty, last)
                             log_csv(csv_dir, "trades", {"ts": loop_ts.isoformat(), "event": "PARTIAL_TP", "symbol": sym, "side": "SELL", "price": last, "qty": sell_qty, "note": "mid-band"}, fieldnames=TRADE_FIELDS)
 
                 # stop-loss
                 if last <= sl:
                     place_order(exchange, sym, "sell", pos["qty"], price=last, dry_run=cfg["general"]["dry_run"])
+                    logger.info("EXIT %s reason=STOP qty=%s price=%.4f", sym, pos["qty"], last)
                     finalize_exit(cfg, state, state_path, csv_dir, tg, sym, "STOP", last, pos["qty"])
                     continue
 
@@ -430,8 +454,7 @@ def main():
             log_csv(csv_dir, "equity", {"ts": loop_ts.isoformat(), "equity": equity_now}, fieldnames=EQUITY_FIELDS)
             time.sleep(30)
         except Exception as e:
-            print("Loop error:", e, file=sys.stderr)
-            traceback.print_exc()
+            logger.exception("Loop error: %s", e)
             time.sleep(10)
 
 if __name__ == "__main__":
