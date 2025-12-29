@@ -19,7 +19,25 @@ except Exception:
 
 def load_config(path="config.yaml"):
     with open(path, "r") as f:
-        return yaml.safe_load(f)
+        cfg = yaml.safe_load(f) or {}
+    return cfg
+
+def apply_env_overrides(cfg):
+    cfg.setdefault("credentials", {})
+    cfg.setdefault("alerts", {})
+    api_key = os.getenv("BINANCE_API_KEY")
+    api_secret = os.getenv("BINANCE_API_SECRET")
+    tg_token = os.getenv("TELEGRAM_BOT_TOKEN")
+    tg_chat = os.getenv("TELEGRAM_CHAT_ID")
+    if api_key:
+        cfg["credentials"]["api_key"] = api_key
+    if api_secret:
+        cfg["credentials"]["api_secret"] = api_secret
+    if tg_token:
+        cfg["alerts"]["telegram_bot_token"] = tg_token
+    if tg_chat:
+        cfg["alerts"]["telegram_chat_id"] = tg_chat
+    return cfg
 
 def now_tz(tz_name):
     return datetime.now(tz.gettz(tz_name))
@@ -39,13 +57,13 @@ def write_state(path, state):
         json.dump(state, f, indent=2, sort_keys=True)
     os.replace(tmp, path)
 
-def log_csv(csv_dir, name, row):
+def log_csv(csv_dir, name, row, fieldnames=None):
     ensure_dir(csv_dir)
     fpath = os.path.join(csv_dir, f"{name}.csv")
     exists = os.path.exists(fpath)
     import csv
     with open(fpath, "a", newline="") as fp:
-        writer = csv.DictWriter(fp, fieldnames=list(row.keys()))
+        writer = csv.DictWriter(fp, fieldnames=fieldnames or list(row.keys()))
         if not exists:
             writer.writeheader()
         writer.writerow(row)
@@ -110,6 +128,8 @@ def regime_filter(exchange, symbol, cfg):
 
 def h1_signals(df, cfg, regime):
     st = cfg["strategy"]
+    if len(df) < max(st["donchian_len"], st["bb_len"], st["ema_slow"]) + 2:
+        return None, {}
     emaF = EMAIndicator(df["c"], st["ema_fast"]).ema_indicator()
     emaS = EMAIndicator(df["c"], st["ema_slow"]).ema_indicator()
     atr  = AverageTrueRange(df["h"], df["l"], df["c"], st["atr_len"]).average_true_range()
@@ -147,10 +167,10 @@ def h1_signals(df, cfg, regime):
     params["close"] = close
     return signal, params
 
-def fetch_equity_usdt(exchange, base_ccy="USDT"):
-    balances = exchange.fetch_balance()["total"]
+def fetch_equity_usdt(exchange, base_ccy="USDT", balances=None, tickers=None):
+    balances = balances or exchange.fetch_balance()["total"]
     equity = balances.get(base_ccy, 0.0)
-    tickers = exchange.fetch_tickers()
+    tickers = tickers or exchange.fetch_tickers()
     for asset, amt in balances.items():
         if asset in [base_ccy, None] or not amt:
             continue
@@ -169,6 +189,38 @@ def position_size(equity_usdt, price, atr, atr_mult, risk_pct):
 
 def notional_ok(qty, price, min_notional):
     return (qty * price) >= min_notional
+
+def symbol_limits(exchange, symbol):
+    market = exchange.markets.get(symbol) or {}
+    limits = market.get("limits") or {}
+    return {
+        "min_amount": (limits.get("amount") or {}).get("min"),
+        "min_cost": (limits.get("cost") or {}).get("min"),
+    }
+
+def clamp_qty(exchange, symbol, qty):
+    try:
+        return float(exchange.amount_to_precision(symbol, qty))
+    except Exception:
+        return float(qty)
+
+def order_constraints_ok(exchange, symbol, qty, price, min_notional):
+    lim = symbol_limits(exchange, symbol)
+    if lim["min_amount"] is not None and qty < lim["min_amount"]:
+        return False
+    if lim["min_cost"] is not None and (qty * price) < lim["min_cost"]:
+        return False
+    return notional_ok(qty, price, min_notional)
+
+def get_last_price(tickers, symbol):
+    t = tickers.get(symbol) or {}
+    return t.get("last")
+
+TRADE_FIELDS = [
+    "ts", "event", "symbol", "side", "price", "qty", "sl", "signal", "regime",
+    "equity", "adx_d", "reason", "note",
+]
+EQUITY_FIELDS = ["ts", "equity"]
 
 def is_cooldown(state, symbol, cfg, now):
     cd = state["cooldowns"].get(symbol)
@@ -206,11 +258,12 @@ def finalize_exit(cfg, state, state_path, csv_dir, tg, sym, reason, price, qty):
         "ts": now_tz(cfg["logging"]["tz"]).isoformat(),
         "event": "EXIT",
         "symbol": sym,
+        "side": "SELL",
         "reason": reason,
         "price": price,
         "qty": qty
     }
-    log_csv(csv_dir, "trades", row)
+    log_csv(csv_dir, "trades", row, fieldnames=TRADE_FIELDS)
     if sym in state["positions"]:
         del state["positions"][sym]
     write_state(state_path, state)
@@ -220,7 +273,7 @@ def finalize_exit(cfg, state, state_path, csv_dir, tg, sym, reason, price, qty):
         except: pass
 
 def main():
-    cfg = load_config()
+    cfg = apply_env_overrides(load_config())
     tzname = cfg["logging"]["tz"]
     csv_dir = cfg["logging"]["csv_dir"]
     state_path = cfg["logging"]["state_file"]
@@ -232,7 +285,8 @@ def main():
     state = read_state(state_path)
 
     session_date = daily_key(now_tz(tzname))
-    equity_start = fetch_equity_usdt(exchange, cfg["general"]["base_currency"])
+    base_ccy = cfg["general"]["base_currency"]
+    equity_start = fetch_equity_usdt(exchange, base_ccy)
     if tg:
         try: tg[0].send_message(chat_id=tg[1], text=f"🚀 Bot started. Equity start: {equity_start:.2f} {cfg['general']['base_currency']} (dry_run={cfg['general']['dry_run']})")
         except: pass
@@ -249,7 +303,14 @@ def main():
                     try: tg[0].send_message(chat_id=tg[1], text=f"📅 New session {session_date}. Equity start: {equity_start:.2f}")
                     except: pass
 
-            equity_now = fetch_equity_usdt(exchange, cfg["general"]["base_currency"])
+            symbols = cfg["general"]["symbols"]
+            pos_syms = list(state["positions"].keys())
+            ticker_syms = sorted(set(symbols + pos_syms))
+            tickers = exchange.fetch_tickers(ticker_syms) if ticker_syms else {}
+            balances = exchange.fetch_balance()
+            balances_total = balances.get("total", {})
+            balances_free = balances.get("free", {})
+            equity_now = fetch_equity_usdt(exchange, base_ccy, balances_total, tickers)
             if daily_pnl_guard(cfg, equity_now, equity_start):
                 if tg:
                     try: tg[0].send_message(chat_id=tg[1], text=f"⛔ Daily loss stop reached. Equity {equity_now:.2f} vs start {equity_start:.2f}. Cooling 60m.")
@@ -258,7 +319,13 @@ def main():
                 continue
 
             # entry checks
-            for symbol in cfg["general"]["symbols"]:
+            allow_entries = len(state["positions"]) < cfg["risk"]["max_concurrent_positions"]
+            free_base = balances_free.get(base_ccy, 0.0)
+            for symbol in symbols:
+                if not allow_entries:
+                    break
+                if symbol in state["positions"]:
+                    continue
                 if is_cooldown(state, symbol, cfg, loop_ts):
                     continue
                 regime, adx_val = regime_filter(exchange, symbol, cfg)
@@ -276,10 +343,13 @@ def main():
                 else:
                     sl = params["sl"]; atr_mult = cfg["strategy"]["atr_sl_mr_mult"]
 
-                qty = position_size(equity_now, price, atr, atr_mult, cfg["risk"]["per_trade_risk_pct"])
-                if notional_ok(qty, price, cfg["general"]["min_notional_usdt"]):
+                risk_qty = position_size(equity_now, price, atr, atr_mult, cfg["risk"]["per_trade_risk_pct"])
+                max_affordable = free_base / price if price > 0 else 0.0
+                qty = clamp_qty(exchange, symbol, min(risk_qty, max_affordable))
+                if qty > 0 and order_constraints_ok(exchange, symbol, qty, price, cfg["general"]["min_notional_usdt"]):
                     place_order(exchange, symbol, "buy", qty, price=price, dry_run=cfg["general"]["dry_run"])
-                    state["cooldowns"][symbol] = loop_ts.isoformat()
+                    free_base = max(0.0, free_base - (qty * price))
+                    set_cooldown(state, symbol, loop_ts)
                     pos = {"symbol":symbol, "entry_time": loop_ts.isoformat(), "entry_price": price, "qty": qty, "sl": sl, "signal": signal, "regime": regime}
                     if signal == "R_LONG" and "tp_mid" in params and params["tp_mid"]:
                         pos["tp_mid"] = params["tp_mid"]
@@ -287,10 +357,11 @@ def main():
                         pos["trail_mult"] = params["trail_mult"]; pos["trail_ref"] = price
                     state["positions"][symbol] = pos
                     write_state(state_path, state)
+                    allow_entries = len(state["positions"]) < cfg["risk"]["max_concurrent_positions"]
                     log_csv(csv_dir, "trades", {
                         "ts": loop_ts.isoformat(), "event":"ENTER", "symbol":symbol, "side":"LONG",
                         "price": price, "qty": qty, "sl": sl, "signal": signal, "regime": regime, "equity": equity_now, "adx_d": adx_val
-                    })
+                    }, fieldnames=TRADE_FIELDS)
                     if tg:
                         try: tg[0].send_message(chat_id=tg[1], text=f"🟢 ENTER {symbol} {signal} qty={qty} @ {price:.4f} SL={sl:.4f} regime={regime}")
                         except: pass
@@ -298,8 +369,9 @@ def main():
             # exits
             positions = dict(state["positions"])
             for sym, pos in positions.items():
-                ticker = exchange.fetch_ticker(sym)
-                last = ticker["last"]
+                last = get_last_price(tickers, sym)
+                if last is None:
+                    last = exchange.fetch_ticker(sym)["last"]
                 qty = pos["qty"]
                 sl = pos["sl"]
                 changed = False
@@ -321,10 +393,11 @@ def main():
                         finalize_exit(cfg, state, state_path, csv_dir, tg, sym, "TIME_STOP", last, qty)
                         continue
                     if "tp_mid" in pos and last >= pos["tp_mid"]:
-                        sell_qty = qty * 0.5
-                        place_order(exchange, sym, "sell", sell_qty, price=last, dry_run=cfg["general"]["dry_run"])
-                        pos["qty"] = float(qty - sell_qty); del pos["tp_mid"]; changed = True
-                        log_csv(csv_dir, "trades", {"ts": loop_ts.isoformat(), "event": "PARTIAL_TP", "symbol": sym, "price": last, "qty": sell_qty, "note": "mid-band"})
+                        sell_qty = clamp_qty(exchange, sym, qty * 0.5)
+                        if order_constraints_ok(exchange, sym, sell_qty, last, cfg["general"]["min_notional_usdt"]):
+                            place_order(exchange, sym, "sell", sell_qty, price=last, dry_run=cfg["general"]["dry_run"])
+                            pos["qty"] = float(qty - sell_qty); del pos["tp_mid"]; changed = True
+                            log_csv(csv_dir, "trades", {"ts": loop_ts.isoformat(), "event": "PARTIAL_TP", "symbol": sym, "side": "SELL", "price": last, "qty": sell_qty, "note": "mid-band"}, fieldnames=TRADE_FIELDS)
 
                 # stop-loss
                 if last <= sl:
@@ -337,8 +410,8 @@ def main():
                     write_state(state_path, state)
 
             # equity snapshot
-            equity_now = fetch_equity_usdt(exchange, cfg["general"]["base_currency"])
-            log_csv(csv_dir, "equity", {"ts": loop_ts.isoformat(), "equity": equity_now})
+            equity_now = fetch_equity_usdt(exchange, base_ccy, balances_total, tickers)
+            log_csv(csv_dir, "equity", {"ts": loop_ts.isoformat(), "equity": equity_now}, fieldnames=EQUITY_FIELDS)
             time.sleep(30)
         except Exception as e:
             print("Loop error:", e, file=sys.stderr)

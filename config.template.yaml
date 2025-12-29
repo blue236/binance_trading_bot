@@ -2,7 +2,6 @@ general:
   symbols:
   - BTC/USDT
   - ETH/USDT
-  - SOL/USDT
   timeframe_signal: 1h
   timeframe_regime: 1d
   exchange: binance
