@@ -114,14 +114,32 @@ def connect_exchange(cfg):
         },
     })
 
-    # 서버와 시간 차이 미리 계산 (Optional but recommended)
-    try:
-        exchange.load_time_difference()
-    except Exception as e:
-        print("Warning: load_time_difference() failed:", e)
+    # 추가: 시작 시 시간차를 여러 번 잡아 안정화
+    for _ in range(3):
+        # 서버와 시간 차이 미리 계산 (Optional but recommended)
+        try:
+            exchange.load_time_difference()
+            break
+        except Exception as e:
+            print("Warning: load_time_difference() failed:", e)
+            time.sleep(1)
 
     exchange.load_markets()
     return exchange
+
+def safe_fetch_balance(exchange, retries=5):
+    for i in range(retries):
+        try:
+            return exchange.fetch_balance()
+        except ccxt.base.errors.InvalidNonce as e:
+            # Binance -1021 대응
+            try:
+                exchange.load_time_difference()
+            except Exception:
+                pass
+            time.sleep(1 + i)   # 점진적 backoff
+    # 끝까지 실패하면 마지막 예외 다시 raise
+    return exchange.fetch_balance()
 
 def connect_telegram(cfg):
     if not cfg["alerts"]["enable_telegram"] or Bot is None:
@@ -200,7 +218,7 @@ def h1_signals(df, cfg, regime):
     return signal, params
 
 def fetch_equity_usdt(exchange, base_ccy="USDT", balances=None, tickers=None):
-    balances = balances or exchange.fetch_balance()["total"]
+    balances = balances or safe_fetch_balance(exchange)["total"]
     equity = balances.get(base_ccy, 0.0)
     tickers = tickers or exchange.fetch_tickers()
     for asset, amt in balances.items():
@@ -322,14 +340,19 @@ def main():
     equity_start = fetch_equity_usdt(exchange, base_ccy)
     logger.info("Bot started. dry_run=%s", cfg["general"]["dry_run"])
     if tg:
+        logger.info("Telegram alerts enabled.")
         try: tg[0].send_message(chat_id=tg[1], text=f"🚀 Bot started. Equity start: {equity_start:.2f} {cfg['general']['base_currency']} (dry_run={cfg['general']['dry_run']})")
         except: pass
+    else:
+        logger.info("Telegram alerts not enabled or failed to connect.")
 
     while True:
         loop_ts = now_tz(tzname)
         try:
             # daily rollover
             dk = daily_key(loop_ts)
+            # print dk, session_date
+            logger.info("dk=%s session_date=%s", dk, session_date)
             if dk != session_date:
                 session_date = dk
                 equity_start = fetch_equity_usdt(exchange, cfg["general"]["base_currency"])
@@ -342,10 +365,13 @@ def main():
             pos_syms = list(state["positions"].keys())
             ticker_syms = sorted(set(symbols + pos_syms))
             tickers = exchange.fetch_tickers(ticker_syms) if ticker_syms else {}
-            balances = exchange.fetch_balance()
+            balances = safe_fetch_balance(exchange)
             balances_total = balances.get("total", {})
             balances_free = balances.get("free", {})
             equity_now = fetch_equity_usdt(exchange, base_ccy, balances_total, tickers)
+            logger.info("Tickers: %s. Equity now: %.2f %s", tickers, equity_now, base_ccy)
+
+            # daily PnL guard
             if daily_pnl_guard(cfg, equity_now, equity_start):
                 logger.warning("Daily loss stop reached. Equity %.2f vs start %.2f", equity_now, equity_start)
                 if tg:
@@ -452,6 +478,7 @@ def main():
             # equity snapshot
             equity_now = fetch_equity_usdt(exchange, base_ccy, balances_total, tickers)
             log_csv(csv_dir, "equity", {"ts": loop_ts.isoformat(), "equity": equity_now}, fieldnames=EQUITY_FIELDS)
+            logger.info("Equity snapshot: %.4f and sleep 30 seconds", equity_now)
             time.sleep(30)
         except Exception as e:
             logger.exception("Loop error: %s", e)
