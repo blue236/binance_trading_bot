@@ -61,12 +61,13 @@ def now_tz(tz_name):
 def ensure_dir(path):
     os.makedirs(path, exist_ok=True)
 
-def setup_logger(log_dir, name="bot.log"):
+def setup_logger(log_dir, name="bot.log", level="INFO"):
     ensure_dir(log_dir)
     logger = logging.getLogger("bot")
+    log_level = getattr(logging, str(level).upper(), logging.INFO)
+    logger.setLevel(log_level)
     if logger.handlers:
         return logger
-    logger.setLevel(logging.INFO)
     fpath = os.path.join(log_dir, name)
     fmt = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
     fh = logging.FileHandler(fpath)
@@ -329,11 +330,20 @@ def main():
     state_path = cfg["logging"]["state_file"]
     os.makedirs(csv_dir, exist_ok=True)
 
-    logger = setup_logger(cfg["logging"]["csv_dir"])
+    logger = setup_logger(cfg["logging"]["csv_dir"], level=cfg.get("logging", {}).get("level", "INFO"))
     exchange = connect_exchange(cfg)
     tg = connect_telegram(cfg)
 
     state = read_state(state_path)
+    logger.debug(
+        "Config: dry_run=%s symbols=%s timeframe_signal=%s timeframe_regime=%s base_currency=%s",
+        cfg["general"]["dry_run"],
+        cfg["general"]["symbols"],
+        cfg["general"]["timeframe_signal"],
+        cfg["general"]["timeframe_regime"],
+        cfg["general"]["base_currency"],
+    )
+    logger.debug("State loaded: positions=%d cooldowns=%d", len(state["positions"]), len(state["cooldowns"]))
 
     session_date = daily_key(now_tz(tzname))
     base_ccy = cfg["general"]["base_currency"]
@@ -349,6 +359,7 @@ def main():
     while True:
         loop_ts = now_tz(tzname)
         try:
+            logger.debug("Loop start: %s", loop_ts.isoformat())
             # daily rollover
             dk = daily_key(loop_ts)
             # print dk, session_date
@@ -370,6 +381,13 @@ def main():
             balances_free = balances.get("free", {})
             equity_now = fetch_equity_usdt(exchange, base_ccy, balances_total, tickers)
             logger.info("Tickers: %s. Equity now: %.2f %s", tickers, equity_now, base_ccy)
+            logger.debug(
+                "Balances: free_%s=%.6f total_assets=%d tickers=%d",
+                base_ccy,
+                float(balances_free.get(base_ccy, 0.0)),
+                len(balances_total),
+                len(tickers),
+            )
 
             # daily PnL guard
             if daily_pnl_guard(cfg, equity_now, equity_start):
@@ -383,19 +401,24 @@ def main():
             # entry checks
             allow_entries = len(state["positions"]) < cfg["risk"]["max_concurrent_positions"]
             free_base = balances_free.get(base_ccy, 0.0)
+            logger.debug("Entry check: allow_entries=%s free_base=%.6f", allow_entries, float(free_base))
             for symbol in symbols:
                 if not allow_entries:
                     break
                 if symbol in state["positions"]:
+                    logger.debug("Skip %s: already in position", symbol)
                     continue
                 if is_cooldown(state, symbol, cfg, loop_ts):
+                    logger.debug("Skip %s: cooldown active", symbol)
                     continue
                 regime, adx_val = regime_filter(exchange, symbol, cfg)
                 if regime == "none":
+                    logger.debug("Skip %s: no regime (adx=%.2f)", symbol, adx_val)
                     continue
                 df = fetch_ohlc(exchange, symbol, cfg["general"]["timeframe_signal"], 300)
                 signal, params = h1_signals(df, cfg, regime)
                 if not signal:
+                    logger.debug("Skip %s: no signal (regime=%s)", symbol, regime)
                     continue
 
                 price = params["close"]
@@ -408,6 +431,15 @@ def main():
                 risk_qty = position_size(equity_now, price, atr, atr_mult, cfg["risk"]["per_trade_risk_pct"])
                 max_affordable = free_base / price if price > 0 else 0.0
                 qty = clamp_qty(exchange, symbol, min(risk_qty, max_affordable))
+                logger.debug(
+                    "Sizing %s: price=%.6f atr=%.6f risk_qty=%.6f max_affordable=%.6f qty=%.6f",
+                    symbol,
+                    price,
+                    atr,
+                    risk_qty,
+                    max_affordable,
+                    qty,
+                )
                 if qty > 0 and order_constraints_ok(exchange, symbol, qty, price, cfg["general"]["min_notional_usdt"]):
                     place_order(exchange, symbol, "buy", qty, price=price, dry_run=cfg["general"]["dry_run"])
                     free_base = max(0.0, free_base - (qty * price))
@@ -428,6 +460,8 @@ def main():
                     if tg:
                         try: tg[0].send_message(chat_id=tg[1], text=f"🟢 ENTER {symbol} {signal} qty={qty} @ {price:.4f} SL={sl:.4f} regime={regime}")
                         except: pass
+                else:
+                    logger.debug("Skip %s: qty=%.6f or constraints not met", symbol, qty)
 
             # exits
             positions = dict(state["positions"])
@@ -438,6 +472,7 @@ def main():
                 qty = pos["qty"]
                 sl = pos["sl"]
                 changed = False
+                logger.debug("Exit check %s: last=%.6f sl=%.6f signal=%s", sym, float(last), float(sl), pos["signal"])
 
                 # trend trailing
                 if pos["signal"] == "T_LONG" and "trail_mult" in pos:

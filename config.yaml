@@ -1,14 +1,14 @@
 general:
   symbols:
-  - BTC/USDT
-  - ETH/USDT
-  - SOL/USDT
+  - BTC/USDC
+  - ETH/USDC
+  - SOL/USDC
   timeframe_signal: 1h
   timeframe_regime: 1d
   exchange: binance
   dry_run: true
-  base_currency: USDT
-  min_notional_usdt: 10.0
+  base_currency: USDC
+  min_notional_usdc: 10.0
 risk:
   per_trade_risk_pct: 0.5
   daily_loss_stop_pct: 2.0
@@ -31,13 +31,14 @@ strategy:
   rsi_mr_threshold: 30
   mean_reversion_time_stop_hours: 24
 alerts:
-  enable_telegram: false
+  enable_telegram: true
   telegram_bot_token: ""
   telegram_chat_id: ""
 logging:
   csv_dir: ./logs
   state_file: ./state.json
   tz: CET
+  level: INFO
 credentials:
   api_key: ""
   api_secret: ""
