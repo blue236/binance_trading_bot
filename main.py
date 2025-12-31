@@ -363,7 +363,7 @@ def main():
             # daily rollover
             dk = daily_key(loop_ts)
             # print dk, session_date
-            logger.info("dk=%s session_date=%s", dk, session_date)
+            logger.debug("dk=%s session_date=%s", dk, session_date)
             if dk != session_date:
                 session_date = dk
                 equity_start = fetch_equity_usdt(exchange, cfg["general"]["base_currency"])
@@ -380,7 +380,7 @@ def main():
             balances_total = balances.get("total", {})
             balances_free = balances.get("free", {})
             equity_now = fetch_equity_usdt(exchange, base_ccy, balances_total, tickers)
-            logger.info("Tickers: %s. Equity now: %.2f %s", tickers, equity_now, base_ccy)
+            #logger.debug("Tickers: %s. Equity now: %.2f %s", tickers, equity_now, base_ccy)
             logger.debug(
                 "Balances: free_%s=%.6f total_assets=%d tickers=%d",
                 base_ccy,
@@ -456,7 +456,7 @@ def main():
                         "ts": loop_ts.isoformat(), "event":"ENTER", "symbol":symbol, "side":"LONG",
                         "price": price, "qty": qty, "sl": sl, "signal": signal, "regime": regime, "equity": equity_now, "adx_d": adx_val
                     }, fieldnames=TRADE_FIELDS)
-                    logger.info("ENTER %s %s qty=%s price=%.4f sl=%.4f regime=%s", symbol, signal, qty, price, sl, regime)
+                    logger.debug("ENTER %s %s qty=%s price=%.4f sl=%.4f regime=%s", symbol, signal, qty, price, sl, regime)
                     if tg:
                         try: tg[0].send_message(chat_id=tg[1], text=f"🟢 ENTER {symbol} {signal} qty={qty} @ {price:.4f} SL={sl:.4f} regime={regime}")
                         except: pass
@@ -513,8 +513,8 @@ def main():
             # equity snapshot
             equity_now = fetch_equity_usdt(exchange, base_ccy, balances_total, tickers)
             log_csv(csv_dir, "equity", {"ts": loop_ts.isoformat(), "equity": equity_now}, fieldnames=EQUITY_FIELDS)
-            logger.info("Equity snapshot: %.4f and sleep 30 seconds", equity_now)
-            time.sleep(30)
+            logger.info("Equity snapshot: %.4f and sleep %d seconds", equity_now, cfg["strategy"].get("loop_sleep_seconds", 60))
+            time.sleep(cfg["strategy"].get("loop_sleep_seconds", 60))
         except Exception as e:
             logger.exception("Loop error: %s", e)
             time.sleep(10)

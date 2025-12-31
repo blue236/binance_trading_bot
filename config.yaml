@@ -30,6 +30,7 @@ strategy:
   atr_sl_mr_mult: 1.2
   rsi_mr_threshold: 30
   mean_reversion_time_stop_hours: 24
+  loop_sleep_seconds: 60
 alerts:
   enable_telegram: true
   telegram_bot_token: ""
@@ -38,7 +39,7 @@ logging:
   csv_dir: ./logs
   state_file: ./state.json
   tz: CET
-  level: INFO
+  level: DEBUG
 credentials:
   api_key: ""
   api_secret: ""
