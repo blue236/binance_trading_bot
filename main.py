@@ -182,6 +182,7 @@ def fetch_ohlc(exchange, symbol, timeframe, limit=500):
     return df
 
 def regime_filter(exchange, symbol, cfg):
+    logger = logging.getLogger("bot")
     tf = cfg["general"]["timeframe_regime"]
     d = fetch_ohlc(exchange, symbol, tf, 400)
     ema200 = EMAIndicator(d["c"], cfg["strategy"]["ema_slow"]).ema_indicator()
@@ -189,11 +190,21 @@ def regime_filter(exchange, symbol, cfg):
     adx_val = ADXIndicator(d["h"], d["l"], d["c"], cfg["strategy"]["adx_len"]).adx().iloc[-1]
     is_trend = slope_pos and adx_val > cfg["strategy"]["trend_adx_threshold"]
     is_range = adx_val <= cfg["strategy"]["trend_adx_threshold"]
+    logger.debug(
+        "Regime %s: slope_pos=%s adx=%.2f threshold=%.2f -> %s",
+        symbol,
+        slope_pos,
+        float(adx_val),
+        cfg["strategy"]["trend_adx_threshold"],
+        "trend" if is_trend else ("range" if is_range else "none"),
+    )
     return ("trend" if is_trend else ("range" if is_range else "none")), float(adx_val)
 
 def h1_signals(df, cfg, regime):
+    logger = logging.getLogger("bot")
     st = cfg["strategy"]
     if len(df) < max(st["donchian_len"], st["bb_len"], st["ema_slow"]) + 2:
+        logger.debug("Signal skip: insufficient bars=%d regime=%s", len(df), regime)
         return None, {}
     emaF = EMAIndicator(df["c"], st["ema_fast"]).ema_indicator()
     emaS = EMAIndicator(df["c"], st["ema_slow"]).ema_indicator()
@@ -217,12 +228,30 @@ def h1_signals(df, cfg, regime):
 
     if regime == "trend":
         cond = (don_hi_prev is not None) and (close > don_hi_prev) and (emaFv > emaSv) and (rsiv < st["rsi_overheat"])
+        logger.debug(
+            "Trend check: close=%.6f don_hi_prev=%s emaF=%.6f emaS=%.6f rsi=%.2f overheat=%s cond=%s",
+            close,
+            f"{don_hi_prev:.6f}" if don_hi_prev is not None else "None",
+            emaFv,
+            emaSv,
+            rsiv,
+            st["rsi_overheat"],
+            cond,
+        )
         if cond:
             signal = "T_LONG"
             params["sl"] = close - st["atr_sl_trend_mult"] * atr_v
             params["trail_mult"] = st["atr_trail_mult"]
     elif regime == "range":
         cond = (lower_v is not None) and (close < lower_v) and (rsiv <= st["rsi_mr_threshold"])
+        logger.debug(
+            "Range check: close=%.6f lower=%.6f rsi=%.2f threshold=%s cond=%s",
+            close,
+            lower_v if lower_v is not None else float("nan"),
+            rsiv,
+            st["rsi_mr_threshold"],
+            cond,
+        )
         if cond:
             signal = "R_LONG"
             params["sl"] = close - st["atr_sl_mr_mult"] * atr_v
@@ -230,6 +259,15 @@ def h1_signals(df, cfg, regime):
 
     params["atr"] = atr_v
     params["close"] = close
+    if signal:
+        logger.debug(
+            "Signal=%s close=%.6f atr=%.6f sl=%.6f regime=%s",
+            signal,
+            close,
+            atr_v,
+            params.get("sl", 0.0),
+            regime,
+        )
     return signal, params
 
 def fetch_equity_usdt(exchange, base_ccy="USDT", balances=None, tickers=None):
@@ -250,6 +288,15 @@ def position_size(equity_usdt, price, atr, atr_mult, risk_pct):
     if stop_dist <= 0:
         return 0.0
     qty = max(risk_usdt / stop_dist, 0.0)
+    logging.getLogger("bot").debug(
+        "Position size: equity=%.2f price=%.6f atr=%.6f mult=%.2f risk_pct=%.2f qty=%.6f",
+        equity_usdt,
+        price,
+        atr,
+        atr_mult,
+        risk_pct,
+        qty,
+    )
     return float(round(qty, 6))
 
 def notional_ok(qty, price, min_notional):
