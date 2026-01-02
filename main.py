@@ -55,6 +55,20 @@ def apply_env_overrides(cfg):
         cfg["alerts"]["telegram_chat_id"] = tg_chat
     return cfg
 
+def deep_merge(base, updates):
+    for k, v in (updates or {}).items():
+        if isinstance(v, dict) and isinstance(base.get(k), dict):
+            deep_merge(base[k], v)
+        else:
+            base[k] = v
+    return base
+
+def apply_aggressive_overrides(cfg):
+    gen = cfg.get("general", {})
+    if not (gen.get("dry_run") and gen.get("aggressive_mode")):
+        return cfg
+    return deep_merge(cfg, cfg.get("aggressive", {}))
+
 def now_tz(tz_name):
     return datetime.now(tz.gettz(tz_name))
 
@@ -325,6 +339,7 @@ def finalize_exit(cfg, state, state_path, csv_dir, tg, sym, reason, price, qty):
 
 def main():
     cfg = apply_env_overrides(load_config())
+    cfg = apply_aggressive_overrides(cfg)
     tzname = cfg["logging"]["tz"]
     csv_dir = cfg["logging"]["csv_dir"]
     state_path = cfg["logging"]["state_file"]
