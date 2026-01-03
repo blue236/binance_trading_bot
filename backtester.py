@@ -37,6 +37,13 @@ except ImportError as e:
 import pandas as pd  # type: ignore
 import os
 import matplotlib.pyplot as plt  # type: ignore
+import logging
+
+# Set up basic logging configuration. Debug messages will aid troubleshooting.
+logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s")
+
+# Create a module-level logger
+logger = logging.getLogger(__name__)
 
 
 def fetch_ohlcv(
@@ -67,9 +74,11 @@ def fetch_ohlcv(
         DataFrame with columns [timestamp, open, high, low, close, volume].
     """
     # Fetch data from the exchange
+    logger.debug(f"Fetching OHLCV for {symbol} (timeframe={timeframe}, limit={limit}, since={since})")
     ohlcv = exchange.fetch_ohlcv(symbol, timeframe=timeframe, since=since, limit=limit)
     df = pd.DataFrame(ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
     df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+    logger.debug(f"Fetched {len(df)} candles for {symbol}")
     return df
 
 def save_ohlcv_to_csv(df: pd.DataFrame, symbol: str, timeframe: str, limit: int, output_dir: str = "datasheets") -> str:
@@ -99,6 +108,7 @@ def save_ohlcv_to_csv(df: pd.DataFrame, symbol: str, timeframe: str, limit: int,
     filename = f"{clean_symbol}_{timeframe}_{limit}.csv"
     filepath = os.path.join(output_dir, filename)
     df.to_csv(filepath, index=False)
+    logger.debug(f"Saved OHLCV data for {symbol} to {filepath}")
     return filepath
 
 def plot_trades(df: pd.DataFrame, buy_indices: List[int], sell_indices: List[int], symbol: str, window: int, threshold: float, output_dir: str = "plots") -> str:
@@ -133,6 +143,7 @@ def plot_trades(df: pd.DataFrame, buy_indices: List[int], sell_indices: List[int
     filename = f"{clean_symbol}_win{window}_thr{threshold_pct}.png"
     filepath = os.path.join(output_dir, filename)
 
+    logger.debug(f"Generating trade plot for {symbol}, window={window}, threshold={threshold}")
     plt.figure(figsize=(12, 6))
     # Plot closing prices
     plt.plot(df["timestamp"], df["close"], label="Close Price", color="blue")
@@ -149,6 +160,7 @@ def plot_trades(df: pd.DataFrame, buy_indices: List[int], sell_indices: List[int
     plt.tight_layout()
     plt.savefig(filepath)
     plt.close()
+    logger.debug(f"Saved trade plot for {symbol} to {filepath}")
     return filepath
 
 
@@ -201,6 +213,7 @@ def mean_reversion_backtest(
     buy_indices: List[int] = []
     sell_indices: List[int] = []
 
+    logger.debug(f"Starting mean-reversion backtest: window={window}, threshold={threshold}")
     for i, price in enumerate(prices):
         # Only consider signals when enough data points are available
         if i + 1 >= window:
@@ -226,6 +239,9 @@ def mean_reversion_backtest(
                     coins += coins_purchased
                     usdt -= amount_to_invest
                     buy_indices.append(i)
+                    logger.debug(
+                        f"Buy signal at index {i}: price={price:.5f}, MA={ma:.5f}, deviation={deviation:.5f}, vol={vol:.5f}, invest_fraction={invest_fraction:.2f}, coins_added={coins_purchased:.5f}, USDT_remain={usdt:.2f}"
+                    )
             # Sell logic
             elif coins > 0 and deviation >= threshold:
                 sell_fraction = position_split_factor if vol > volatility_threshold else 1.0
@@ -238,6 +254,9 @@ def mean_reversion_backtest(
                     usdt += sell_coins * trade_price * (1 - fee)
                     coins -= sell_coins
                     sell_indices.append(i)
+                    logger.debug(
+                        f"Sell signal at index {i}: price={price:.5f}, MA={ma:.5f}, deviation={deviation:.5f}, vol={vol:.5f}, sell_fraction={sell_fraction:.2f}, coins_sold={sell_coins:.5f}, USDT_now={usdt:.2f}"
+                    )
     # Liquidate any remaining coins at final price
     if coins > 0:
         final_price = prices[-1]
@@ -245,6 +264,7 @@ def mean_reversion_backtest(
         trade_price = bid_price * (1 - slippage)
         usdt += coins * trade_price * (1 - fee)
         coins = 0.0
+    logger.debug(f"Backtest completed: final USDT={usdt:.2f}, buys={len(buy_indices)}, sells={len(sell_indices)}")
     return usdt, buy_indices, sell_indices
 
 
@@ -271,9 +291,22 @@ def run_backtests(
     exchange = ccxt.binance()
     results: List[Dict[str, Any]] = []
     for symbol in symbols:
-        df = fetch_ohlcv(exchange, symbol, timeframe=timeframe, limit=limit)
-        # Save OHLCV data for each symbol/timeframe/limit combination
-        save_ohlcv_to_csv(df, symbol, timeframe, limit)
+        logger.debug(f"Running backtests for {symbol}")
+        # Determine if data already exists in datasheets
+        clean_symbol = symbol.replace("/", "_")
+        csv_filename = f"{clean_symbol}_{timeframe}_{limit}.csv"
+        csv_path = os.path.join("datasheets", csv_filename)
+        if os.path.exists(csv_path):
+            # Load existing data instead of fetching
+            logger.debug(f"Found cached OHLCV data for {symbol}: {csv_path}, skipping fetch")
+            df = pd.read_csv(csv_path)
+            # Ensure timestamp column is datetime
+            if "timestamp" in df.columns:
+                df["timestamp"] = pd.to_datetime(df["timestamp"])
+        else:
+            # Fetch fresh data and save
+            df = fetch_ohlcv(exchange, symbol, timeframe=timeframe, limit=limit)
+            save_ohlcv_to_csv(df, symbol, timeframe, limit)
         closes = df["close"].tolist()
         # Determine parameter combinations based on optimisation method
         param_combinations: List[Tuple[int, float]] = []
