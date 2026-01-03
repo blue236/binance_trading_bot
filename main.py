@@ -502,7 +502,7 @@ def main():
                     max_affordable,
                     qty,
                 )
-                if qty > 0 and order_constraints_ok(exchange, symbol, qty, price, cfg["general"]["min_notional_usdt"]):
+                if qty > 0 and order_constraints_ok(exchange, symbol, qty, price, cfg["general"]["min_notional_usdc"]):
                     place_order(exchange, symbol, "buy", qty, price=price, dry_run=cfg["general"]["dry_run"])
                     free_base = max(0.0, free_base - (qty * price))
                     set_cooldown(state, symbol, loop_ts)
@@ -555,7 +555,7 @@ def main():
                         continue
                     if "tp_mid" in pos and last >= pos["tp_mid"]:
                         sell_qty = clamp_qty(exchange, sym, qty * 0.5)
-                        if order_constraints_ok(exchange, sym, sell_qty, last, cfg["general"]["min_notional_usdt"]):
+                        if order_constraints_ok(exchange, sym, sell_qty, last, cfg["general"]["min_notional_usdc"]):
                             place_order(exchange, sym, "sell", sell_qty, price=last, dry_run=cfg["general"]["dry_run"])
                             pos["qty"] = float(qty - sell_qty); del pos["tp_mid"]; changed = True
                             logger.info("PARTIAL_TP %s qty=%s price=%.4f note=mid-band", sym, sell_qty, last)
