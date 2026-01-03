@@ -175,7 +175,7 @@ def mean_reversion_backtest(
     spread: float = 0.0005,
     volatility_threshold: float = 0.05,
     position_split_factor: float = 0.5,
-) -> Tuple[float, List[int], List[int]]:
+) -> Tuple[float, List[int], List[int], List[float], List[float]]:
     """Mean‑reversion backtest with transaction costs and volatility‑based position sizing.
 
     Parameters
@@ -204,14 +204,17 @@ def mean_reversion_backtest(
 
     Returns
     -------
-    Tuple[float, List[int], List[int]]
-        Final capital in USDT and lists of buy and sell indices.
+    Tuple[float, List[int], List[int], List[float], List[float]]
+        Final capital in USDT, lists of buy/sell indices, and corresponding quantities traded.
     """
     # Convert initial capital to USDT
     usdt = capital * currency_rate
     coins = 0.0
     buy_indices: List[int] = []
     sell_indices: List[int] = []
+    # Track quantities of each buy and sell transaction
+    buy_amounts: List[float] = []
+    sell_amounts: List[float] = []
 
     logger.debug(f"Starting mean-reversion backtest: window={window}, threshold={threshold}")
     for i, price in enumerate(prices):
@@ -239,14 +242,16 @@ def mean_reversion_backtest(
                     coins += coins_purchased
                     usdt -= amount_to_invest
                     buy_indices.append(i)
+                    buy_amounts.append(coins_purchased)
                     logger.debug(
                         f"Buy signal at index {i}: price={price:.5f}, MA={ma:.5f}, deviation={deviation:.5f}, vol={vol:.5f}, invest_fraction={invest_fraction:.2f}, coins_added={coins_purchased:.5f}, USDT_remain={usdt:.2f}"
                     )
             # Sell logic
             elif coins > 0 and deviation >= threshold:
                 sell_fraction = position_split_factor if vol > volatility_threshold else 1.0
-                # Determine number of coins to sell
+                # Determine number of coins to sell. Ensure it does not exceed current holdings.
                 sell_coins = coins * sell_fraction
+                sell_coins = min(sell_coins, coins)
                 if sell_coins > 0:
                     # Adjust price for spread and slippage on sell
                     bid_price = price * (1 - spread / 2)
@@ -254,6 +259,7 @@ def mean_reversion_backtest(
                     usdt += sell_coins * trade_price * (1 - fee)
                     coins -= sell_coins
                     sell_indices.append(i)
+                    sell_amounts.append(sell_coins)
                     logger.debug(
                         f"Sell signal at index {i}: price={price:.5f}, MA={ma:.5f}, deviation={deviation:.5f}, vol={vol:.5f}, sell_fraction={sell_fraction:.2f}, coins_sold={sell_coins:.5f}, USDT_now={usdt:.2f}"
                     )
@@ -263,9 +269,18 @@ def mean_reversion_backtest(
         bid_price = final_price * (1 - spread / 2)
         trade_price = bid_price * (1 - slippage)
         usdt += coins * trade_price * (1 - fee)
+        sell_indices.append(len(prices) - 1)
+        sell_amounts.append(coins)
         coins = 0.0
-    logger.debug(f"Backtest completed: final USDT={usdt:.2f}, buys={len(buy_indices)}, sells={len(sell_indices)}")
-    return usdt, buy_indices, sell_indices
+    # Sanity check: total sold should not exceed total bought
+    if sum(sell_amounts) > sum(buy_amounts):
+        logger.warning(
+            f"Warning: total sold quantity {sum(sell_amounts):.5f} exceeds total bought quantity {sum(buy_amounts):.5f}."
+        )
+    logger.debug(
+        f"Backtest completed: final USDT={usdt:.2f}, buys={len(buy_indices)}, sells={len(sell_indices)}, total_bought={sum(buy_amounts):.5f}, total_sold={sum(sell_amounts):.5f}"
+    )
+    return usdt, buy_indices, sell_indices, buy_amounts, sell_amounts
 
 
 def run_backtests(
@@ -322,7 +337,7 @@ def run_backtests(
                 thresh = random.choice(thresholds)
                 param_combinations.append((w, thresh))
         for w, thresh in param_combinations:
-            final_usdt, buys, sells = mean_reversion_backtest(
+            final_usdt, buys, sells, buy_amts, sell_amts = mean_reversion_backtest(
                 closes, w, thresh,
                 capital=10_000.0,
                 currency_rate=1.1,
@@ -337,6 +352,10 @@ def run_backtests(
             roi = (final_usdt - initial_usdt) / initial_usdt * 100
             # Generate plot showing buy/sell points on price data
             plot_trades(df, buys, sells, symbol, w, thresh)
+            # Calculate total quantities traded (in units of the underlying asset)
+            total_bought = sum(buy_amts)
+            total_sold = sum(sell_amts)
+            # Append results
             results.append({
                 "symbol": symbol,
                 "window": w,
@@ -344,6 +363,8 @@ def run_backtests(
                 "roi": roi,
                 "buys": len(buys),
                 "sells": len(sells),
+                "total_bought": total_bought,
+                "total_sold": total_sold,
             })
     # Create DataFrame for pretty printing
     results_df = pd.DataFrame(results)
