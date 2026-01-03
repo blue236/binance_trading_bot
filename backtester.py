@@ -35,6 +35,8 @@ except ImportError as e:
     raise SystemExit("ccxt library is required; install via `pip install ccxt`." )
 
 import pandas as pd  # type: ignore
+import os
+import matplotlib.pyplot as plt  # type: ignore
 
 
 def fetch_ohlcv(
@@ -69,6 +71,85 @@ def fetch_ohlcv(
     df = pd.DataFrame(ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
     df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
     return df
+
+def save_ohlcv_to_csv(df: pd.DataFrame, symbol: str, timeframe: str, limit: int, output_dir: str = "datasheets") -> str:
+    """Save OHLCV DataFrame to a CSV file.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        DataFrame containing OHLCV data.
+    symbol : str
+        Symbol string (e.g., "BTC/USDT") used for filename.
+    timeframe : str
+        Timeframe string (e.g., "1d") used for filename.
+    limit : int
+        Number of candles retrieved used for filename.
+    output_dir : str, default "datasheets"
+        Directory where CSV files will be stored.
+
+    Returns
+    -------
+    str
+        Path to the saved CSV file.
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    # Replace slash in symbol to make file system friendly
+    clean_symbol = symbol.replace("/", "_")
+    filename = f"{clean_symbol}_{timeframe}_{limit}.csv"
+    filepath = os.path.join(output_dir, filename)
+    df.to_csv(filepath, index=False)
+    return filepath
+
+def plot_trades(df: pd.DataFrame, buy_indices: List[int], sell_indices: List[int], symbol: str, window: int, threshold: float, output_dir: str = "plots") -> str:
+    """Generate a line plot of closing prices and overlay buy/sell markers.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        DataFrame containing at least 'timestamp' and 'close' columns.
+    buy_indices : List[int]
+        Indices in the DataFrame where buy actions occur.
+    sell_indices : List[int]
+        Indices in the DataFrame where sell actions occur.
+    symbol : str
+        Trading pair symbol (e.g., "BTC/USDT").
+    window : int
+        Moving average window used in the backtest.
+    threshold : float
+        Deviation threshold used in the backtest.
+    output_dir : str, default "plots"
+        Directory where plot images will be saved.
+
+    Returns
+    -------
+    str
+        Path to the saved plot image.
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    clean_symbol = symbol.replace("/", "_")
+    # Build filename using threshold percentage without decimal point for clarity
+    threshold_pct = int(threshold * 100)
+    filename = f"{clean_symbol}_win{window}_thr{threshold_pct}.png"
+    filepath = os.path.join(output_dir, filename)
+
+    plt.figure(figsize=(12, 6))
+    # Plot closing prices
+    plt.plot(df["timestamp"], df["close"], label="Close Price", color="blue")
+    # Scatter buy and sell points
+    if buy_indices:
+        plt.scatter(df["timestamp"].iloc[buy_indices], df["close"].iloc[buy_indices], marker="^", color="green", label="Buy")
+    if sell_indices:
+        plt.scatter(df["timestamp"].iloc[sell_indices], df["close"].iloc[sell_indices], marker="v", color="red", label="Sell")
+    plt.title(f"{symbol} Close Price with Trades (Window={window}, Threshold={threshold:.2f})")
+    plt.xlabel("Date")
+    plt.ylabel("Price")
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(filepath)
+    plt.close()
+    return filepath
 
 
 def mean_reversion_backtest(
@@ -144,11 +225,15 @@ def run_backtests(
     results: List[Dict[str, Any]] = []
     for symbol in symbols:
         df = fetch_ohlcv(exchange, symbol, timeframe=timeframe, limit=limit)
+        # Save OHLCV data for each symbol/timeframe/limit combination
+        save_ohlcv_to_csv(df, symbol, timeframe, limit)
         closes = df["close"].tolist()
         for w in windows:
             for thresh in thresholds:
                 final_usdt, buys, sells = mean_reversion_backtest(closes, w, thresh)
                 roi = (final_usdt - 10_000.0 * 1.1) / (10_000.0 * 1.1) * 100
+                # Generate plot showing buy/sell points on price data
+                plot_trades(df, buys, sells, symbol, w, thresh)
                 results.append({
                     "symbol": symbol,
                     "window": w,
