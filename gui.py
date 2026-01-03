@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import os, sys, yaml, subprocess, json, signal, time
+import os, sys, yaml, subprocess, signal
 import PySimpleGUI as sg
 
 CONFIG_PATH = "config.yaml"
@@ -40,7 +40,11 @@ def stop_bot():
     try:
         with open(PID_FILE, "r") as f:
             pid = int(f.read().strip())
-        os.kill(pid, signal.SIGTERM)
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        else:
+            os.kill(pid, signal.SIGTERM)
     except Exception as e:
         pass
     finally:

@@ -1,0 +1,7 @@
+.venv/
+.bot_pid
+logs/
+state.json
+config.yaml
+.credentials.json
+credentials.json

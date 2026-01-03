@@ -1,15 +1,13 @@
 general:
   symbols:
-  - BTC/USDC
-  - ETH/USDC
-  - SOL/USDC
+  - BTC/USDT
+  - ETH/USDT
   timeframe_signal: 1h
   timeframe_regime: 1d
   exchange: binance
   dry_run: true
-  aggressive_mode: true
-  base_currency: USDC
-  min_notional_usdc: 10.0
+  base_currency: USDT
+  min_notional_usdt: 10.0
 risk:
   per_trade_risk_pct: 0.5
   daily_loss_stop_pct: 2.0
@@ -31,39 +29,14 @@ strategy:
   atr_sl_mr_mult: 1.2
   rsi_mr_threshold: 30
   mean_reversion_time_stop_hours: 24
-aggressive:
-  general:
-    timeframe_signal: 15m
-    min_notional_usdc: 5.0
-  risk:
-    per_trade_risk_pct: 1.0
-    daily_loss_stop_pct: 4.0
-    max_concurrent_positions: 5
-    cooldown_hours: 1
-  strategy:
-    adx_len: 10
-    trend_adx_threshold: 15
-    ema_fast: 20
-    ema_slow: 100
-    donchian_len: 10
-    rsi_overheat: 85
-    atr_sl_trend_mult: 1.0
-    atr_trail_mult: 1.8
-    bb_len: 14
-    bb_mult: 1.6
-    atr_sl_mr_mult: 1.0
-    rsi_mr_threshold: 35
-    mean_reversion_time_stop_hours: 8
-  loop_sleep_seconds: 60
 alerts:
-  enable_telegram: true
+  enable_telegram: false
   telegram_bot_token: ""
   telegram_chat_id: ""
 logging:
   csv_dir: ./logs
   state_file: ./state.json
   tz: CET
-  level: DEBUG
 credentials:
   api_key: ""
   api_secret: ""

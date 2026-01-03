@@ -4,6 +4,7 @@ cd "$(dirname "$0")"
 if [[ -d ".venv" ]]; then
   source .venv/bin/activate
 fi
+python credentials.py >/dev/null 2>&1 || true
 if [[ -n "${DISPLAY-}" ]]; then
   echo "DISPLAY detected -> launching GUI (gui.py)"
   exec python gui.py
