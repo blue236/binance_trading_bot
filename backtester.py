@@ -158,8 +158,13 @@ def mean_reversion_backtest(
     threshold: float,
     capital: float = 10_000.0,
     currency_rate: float = 1.1,
+    fee: float = 0.001,
+    slippage: float = 0.0005,
+    spread: float = 0.0005,
+    volatility_threshold: float = 0.05,
+    position_split_factor: float = 0.5,
 ) -> Tuple[float, List[int], List[int]]:
-    """Simple mean‑reversion backtest.
+    """Mean‑reversion backtest with transaction costs and volatility‑based position sizing.
 
     Parameters
     ----------
@@ -174,6 +179,16 @@ def mean_reversion_backtest(
         Starting capital in euros.
     currency_rate : float, default 1.1
         EUR to USDT conversion rate. Capital will be converted to USDT.
+    fee : float, default 0.001
+        Commission fee per trade (e.g., 0.001 = 0.1%). Applied on trade value.
+    slippage : float, default 0.0005
+        Slippage factor applied to trade price (e.g., 0.0005 = 0.05%).
+    spread : float, default 0.0005
+        Bid/ask spread factor; half of this is applied to buy and sell prices.
+    volatility_threshold : float, default 0.05
+        Threshold for volatility (absolute percentage change) to trigger partial position sizing.
+    position_split_factor : float, default 0.5
+        Fraction of capital or position to deploy when volatility exceeds the threshold.
 
     Returns
     -------
@@ -183,30 +198,53 @@ def mean_reversion_backtest(
     # Convert initial capital to USDT
     usdt = capital * currency_rate
     coins = 0.0
-    position = False
     buy_indices: List[int] = []
     sell_indices: List[int] = []
 
     for i, price in enumerate(prices):
+        # Only consider signals when enough data points are available
         if i + 1 >= window:
             window_prices = prices[i + 1 - window : i + 1]
             ma = sum(window_prices) / window
             deviation = (price - ma) / ma
-            if not position and deviation <= -threshold:
-                # Buy all with USDT
-                coins = usdt / price
-                usdt = 0.0
-                position = True
-                buy_indices.append(i)
-            elif position and deviation >= threshold:
-                # Sell all coins
-                usdt = coins * price
-                coins = 0.0
-                position = False
-                sell_indices.append(i)
-    # If still holding at the end, liquidate
-    if position:
-        usdt = coins * prices[-1]
+            # Compute recent volatility based on previous close
+            vol = 0.0
+            if i > 0 and prices[i - 1] != 0:
+                vol = abs(price - prices[i - 1]) / prices[i - 1]
+            # Determine fraction of capital/position to use based on volatility
+            invest_fraction = position_split_factor if vol > volatility_threshold else 1.0
+            # Buy logic
+            if coins == 0 and deviation <= -threshold:
+                # Amount of USDT to allocate
+                amount_to_invest = usdt * invest_fraction
+                if amount_to_invest > 0:
+                    # Adjust price for spread and slippage
+                    ask_price = price * (1 + spread / 2)
+                    trade_price = ask_price * (1 + slippage)
+                    # Calculate coins purchased, accounting for fees
+                    coins_purchased = (amount_to_invest / trade_price) * (1 - fee)
+                    coins += coins_purchased
+                    usdt -= amount_to_invest
+                    buy_indices.append(i)
+            # Sell logic
+            elif coins > 0 and deviation >= threshold:
+                sell_fraction = position_split_factor if vol > volatility_threshold else 1.0
+                # Determine number of coins to sell
+                sell_coins = coins * sell_fraction
+                if sell_coins > 0:
+                    # Adjust price for spread and slippage on sell
+                    bid_price = price * (1 - spread / 2)
+                    trade_price = bid_price * (1 - slippage)
+                    usdt += sell_coins * trade_price * (1 - fee)
+                    coins -= sell_coins
+                    sell_indices.append(i)
+    # Liquidate any remaining coins at final price
+    if coins > 0:
+        final_price = prices[-1]
+        bid_price = final_price * (1 - spread / 2)
+        trade_price = bid_price * (1 - slippage)
+        usdt += coins * trade_price * (1 - fee)
+        coins = 0.0
     return usdt, buy_indices, sell_indices
 
 
@@ -216,10 +254,19 @@ def run_backtests(
     limit: int,
     windows: List[int],
     thresholds: List[float],
+    fee: float = 0.001,
+    slippage: float = 0.0005,
+    spread: float = 0.0005,
+    volatility_threshold: float = 0.05,
+    position_split_factor: float = 0.5,
+    optimize_method: str = "grid",
+    random_samples: int = 10,
 ) -> None:
-    """Fetch data for each symbol and run mean‑reversion backtests.
+    """Fetch data for each symbol and run backtests with parameter optimisation.
 
-    Prints a summary table with ROI for each parameter combination.
+    Depending on the optimise method (grid or random), evaluate combinations of moving-average
+    windows and thresholds. For each symbol, results are returned and the best parameter
+    combination is identified based on highest ROI.
     """
     exchange = ccxt.binance()
     results: List[Dict[str, Any]] = []
@@ -228,25 +275,65 @@ def run_backtests(
         # Save OHLCV data for each symbol/timeframe/limit combination
         save_ohlcv_to_csv(df, symbol, timeframe, limit)
         closes = df["close"].tolist()
-        for w in windows:
-            for thresh in thresholds:
-                final_usdt, buys, sells = mean_reversion_backtest(closes, w, thresh)
-                roi = (final_usdt - 10_000.0 * 1.1) / (10_000.0 * 1.1) * 100
-                # Generate plot showing buy/sell points on price data
-                plot_trades(df, buys, sells, symbol, w, thresh)
-                results.append({
-                    "symbol": symbol,
-                    "window": w,
-                    "threshold": thresh,
-                    "roi": roi,
-                    "buys": len(buys),
-                    "sells": len(sells),
-                })
+        # Determine parameter combinations based on optimisation method
+        param_combinations: List[Tuple[int, float]] = []
+        if optimize_method == "grid":
+            for w in windows:
+                for thresh in thresholds:
+                    param_combinations.append((w, thresh))
+        else:
+            # Random sampling of provided parameter lists
+            import random
+            for _ in range(max(1, random_samples)):
+                w = random.choice(windows)
+                thresh = random.choice(thresholds)
+                param_combinations.append((w, thresh))
+        for w, thresh in param_combinations:
+            final_usdt, buys, sells = mean_reversion_backtest(
+                closes, w, thresh,
+                capital=10_000.0,
+                currency_rate=1.1,
+                fee=fee,
+                slippage=slippage,
+                spread=spread,
+                volatility_threshold=volatility_threshold,
+                position_split_factor=position_split_factor,
+            )
+            # ROI relative to starting USDT (capital * currency_rate)
+            initial_usdt = 10_000.0 * 1.1
+            roi = (final_usdt - initial_usdt) / initial_usdt * 100
+            # Generate plot showing buy/sell points on price data
+            plot_trades(df, buys, sells, symbol, w, thresh)
+            results.append({
+                "symbol": symbol,
+                "window": w,
+                "threshold": thresh,
+                "roi": roi,
+                "buys": len(buys),
+                "sells": len(sells),
+            })
     # Create DataFrame for pretty printing
     results_df = pd.DataFrame(results)
-    # Sort by ROI descending
-    results_df = results_df.sort_values(by="roi", ascending=False)
-    print(results_df.to_string(index=False))
+    # Identify best parameters for each symbol
+    summary_rows: List[Dict[str, Any]] = []
+    for symbol in results_df["symbol"].unique():
+        symbol_df = results_df[results_df["symbol"] == symbol]
+        best_idx = symbol_df["roi"].idxmax()
+        best_row = symbol_df.loc[best_idx]
+        summary_rows.append({
+            "symbol": symbol,
+            "best_window": int(best_row["window"]),
+            "best_threshold": float(best_row["threshold"]),
+            "best_roi": float(best_row["roi"]),
+            "buys": int(best_row["buys"]),
+            "sells": int(best_row["sells"]),
+        })
+    summary_df = pd.DataFrame(summary_rows)
+    # Print detailed results sorted by ROI
+    print("Detailed Results:")
+    print(results_df.sort_values(by="roi", ascending=False).to_string(index=False))
+    print("\nBest Parameters per Symbol:")
+    print(summary_df.to_string(index=False))
 
 
 def parse_args() -> argparse.Namespace:
@@ -282,12 +369,67 @@ def parse_args() -> argparse.Namespace:
         default=[0.02, 0.03, 0.05],
         help="List of deviation thresholds to test (e.g., 0.03 for 3%)",
     )
+    parser.add_argument(
+        "--fee",
+        type=float,
+        default=0.001,
+        help="Commission fee per trade (default: 0.001 = 0.1%)",
+    )
+    parser.add_argument(
+        "--slippage",
+        type=float,
+        default=0.0005,
+        help="Slippage factor applied to trade price (default: 0.0005 = 0.05%)",
+    )
+    parser.add_argument(
+        "--spread",
+        type=float,
+        default=0.0005,
+        help="Bid/ask spread factor (default: 0.0005 = 0.05%)",
+    )
+    parser.add_argument(
+        "--volatility-threshold",
+        type=float,
+        default=0.05,
+        help="Volatility threshold to trigger partial position sizing (default: 0.05 = 5%)",
+    )
+    parser.add_argument(
+        "--position-split-factor",
+        type=float,
+        default=0.5,
+        help="Fraction of capital or coins to trade when volatility exceeds threshold (default: 0.5)",
+    )
+    parser.add_argument(
+        "--optimize-method",
+        choices=["grid", "random"],
+        default="grid",
+        help="Parameter search method: 'grid' for exhaustive search or 'random' for random sampling",
+    )
+    parser.add_argument(
+        "--random-samples",
+        type=int,
+        default=10,
+        help="Number of random parameter combinations to evaluate when optimize-method=random",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    run_backtests(args.symbols, args.timeframe, args.limit, args.windows, args.thresholds)
+    run_backtests(
+        args.symbols,
+        args.timeframe,
+        args.limit,
+        args.windows,
+        args.thresholds,
+        fee=args.fee,
+        slippage=args.slippage,
+        spread=args.spread,
+        volatility_threshold=args.volatility_threshold,
+        position_split_factor=args.position_split_factor,
+        optimize_method=args.optimize_method,
+        random_samples=args.random_samples,
+    )
 
 
 if __name__ == "__main__":
