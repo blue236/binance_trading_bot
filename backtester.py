@@ -29,6 +29,7 @@ import argparse
 import datetime as dt
 from typing import List, Tuple, Dict, Any
 import warnings
+import sys
 
 try:
     import ccxt  # type: ignore
@@ -41,7 +42,6 @@ import os
 import matplotlib.pyplot as plt  # type: ignore
 import logging
 import ta  # type: ignore
-from xgboost import XGBClassifier  # type: ignore
 
 # Set up basic logging configuration. Debug messages will aid troubleshooting.
 logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -221,6 +221,12 @@ def ml_pattern_backtest(
     spread: float = 0.0005,
 ) -> Tuple[float, List[int], List[int], List[float], List[float]]:
     """ML-based backtest with pattern recognition and trade throttling."""
+    try:
+        from xgboost import XGBClassifier  # type: ignore
+    except ImportError as exc:
+        raise SystemExit(
+            "xgboost is required for the ML strategy; install via `pip install xgboost`."
+        ) from exc
     usdt = capital * currency_rate
     coins = 0.0
     buy_indices: List[int] = []
@@ -576,7 +582,7 @@ def run_backtests(
     print(summary_df.to_string(index=False))
 
 
-def parse_args() -> argparse.Namespace:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Binance mean‑reversion backtester")
     parser.add_argument(
         "--symbols",
@@ -643,31 +649,31 @@ def parse_args() -> argparse.Namespace:
         nargs="+",
         type=float,
         default=[0.02, 0.03, 0.05],
-        help="List of deviation thresholds to test (e.g., 0.03 for 3%)",
+        help="List of deviation thresholds to test (e.g., 0.03 for 3%%)",
     )
     parser.add_argument(
         "--fee",
         type=float,
         default=0.001,
-        help="Commission fee per trade (default: 0.001 = 0.1%)",
+        help="Commission fee per trade (default: 0.001 = 0.1%%)",
     )
     parser.add_argument(
         "--slippage",
         type=float,
         default=0.0005,
-        help="Slippage factor applied to trade price (default: 0.0005 = 0.05%)",
+        help="Slippage factor applied to trade price (default: 0.0005 = 0.05%%)",
     )
     parser.add_argument(
         "--spread",
         type=float,
         default=0.0005,
-        help="Bid/ask spread factor (default: 0.0005 = 0.05%)",
+        help="Bid/ask spread factor (default: 0.0005 = 0.05%%)",
     )
     parser.add_argument(
         "--volatility-threshold",
         type=float,
         default=0.05,
-        help="Volatility threshold to trigger partial position sizing (default: 0.05 = 5%)",
+        help="Volatility threshold to trigger partial position sizing (default: 0.05 = 5%%)",
     )
     parser.add_argument(
         "--position-split-factor",
@@ -687,10 +693,18 @@ def parse_args() -> argparse.Namespace:
         default=10,
         help="Number of random parameter combinations to evaluate when optimize-method=random",
     )
+    return parser
+
+
+def parse_args() -> argparse.Namespace:
+    parser = build_parser()
     return parser.parse_args()
 
 
 def main() -> None:
+    if len(sys.argv) == 1:
+        build_parser().print_help()
+        return
     args = parse_args()
     run_backtests(
         args.symbols,
