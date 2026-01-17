@@ -8,3 +8,5 @@ python-telegram-bot==13.15
 urllib3<2
 PySimpleGUI
 matplotlib==3.10.8
+xgboost==2.0.3
+scikit-learn==1.8.0
