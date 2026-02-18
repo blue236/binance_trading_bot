@@ -17,6 +17,7 @@ from .chart_service import ChartService
 from .backtest_service import BacktestService
 
 BASE = Path(__file__).resolve().parent
+(BASE / "static").mkdir(parents=True, exist_ok=True)
 
 config_mgr = ConfigManager(os.environ.get("BTB_WEB_CONFIG", "web_config.yaml"))
 storage = Storage(os.environ.get("BTB_WEB_DB", "webapp_state.sqlite"))
