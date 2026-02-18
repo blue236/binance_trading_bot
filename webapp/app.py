@@ -25,7 +25,7 @@ chart_service = ChartService(storage)
 backtest_service = BacktestService(storage)
 
 app = FastAPI(title="Binance Trading Bot Web UI", version="2.0")
-app.mount("/static", StaticFiles(directory=str(BASE / "static")), name="static")
+app.mount("/static", StaticFiles(directory=str(BASE / "static"), check_dir=False), name="static")
 templates = Jinja2Templates(directory=str(BASE / "templates"))
 
 scheduler: BackgroundScheduler | None = None
