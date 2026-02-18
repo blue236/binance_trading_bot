@@ -158,6 +158,28 @@ def _secrets_status() -> dict:
     }
 
 
+def _ai_log_path() -> Path:
+    if AI_CONFIG_PATH.exists():
+        try:
+            cfg = yaml.safe_load(AI_CONFIG_PATH.read_text()) or {}
+            log_dir = (cfg.get("logging") or {}).get("csv_dir") or "./logs"
+            return (ROOT / log_dir / "bot.log").resolve()
+        except Exception:
+            pass
+    return (ROOT / "logs" / "bot.log").resolve()
+
+
+def _tail_text(path: Path, lines: int = 10) -> str:
+    if not path.exists():
+        return "(log file not found yet)"
+    try:
+        arr = path.read_text(errors="ignore").splitlines()
+        tail = arr[-max(lines, 1):]
+        return "\n".join(tail) if tail else "(empty log)"
+    except Exception as e:
+        return f"(failed to read log: {e})"
+
+
 def _clean_console_output(text: str) -> str:
     # Remove ANSI escape sequences and normalize carriage-return updates.
     text = re.sub(r"\x1B\[[0-?]*[ -/]*[@-~]", "", text or "")
@@ -262,19 +284,24 @@ def run_backtester(req: BacktestRequest):
 
 @app.get("/api/ai/status")
 def ai_status():
-    return {"running": _is_ai_running()}
+    return {"running": _is_ai_running(), "log_tail": _tail_text(_ai_log_path(), 10)}
 
 
 @app.post("/api/ai/start")
 def ai_start():
     _start_ai_bot()
-    return {"ok": True, "running": _is_ai_running()}
+    return {"ok": True, "running": _is_ai_running(), "log_tail": _tail_text(_ai_log_path(), 10)}
 
 
 @app.post("/api/ai/stop")
 def ai_stop():
     _stop_ai_bot()
-    return {"ok": True, "running": _is_ai_running()}
+    return {"ok": True, "running": _is_ai_running(), "log_tail": _tail_text(_ai_log_path(), 10)}
+
+
+@app.get("/api/ai/logs")
+def ai_logs(lines: int = 10):
+    return {"ok": True, "lines": lines, "tail": _tail_text(_ai_log_path(), lines)}
 
 
 @app.get("/api/ai/config")

@@ -34,7 +34,14 @@
       <strong>AI bot status:</strong> <span id="aiStatus">{{ 'RUNNING' if ai_running else 'STOPPED' }}</span>
       <button id="aiStart">Start Bot</button>
       <button id="aiStop">Stop Bot</button>
+      <button id="aiLogRefresh">Refresh Logs</button>
       <span class="muted">(uses existing main.py)</span>
+    </div>
+
+    <div class="card">
+      <h3>AI bot logs (latest 10 lines)</h3>
+      <pre id="aiLog" style="max-height:220px; overflow:auto;">(loading...)</pre>
+      <span class="muted">Scroll with mouse wheel to view older lines in this panel.</span>
     </div>
 
     <div class="card row">
@@ -134,14 +141,36 @@
     await loadChart(symbols[0]);
   }
 
+  function setAiLog(text){
+    document.getElementById('aiLog').textContent=text || '(no logs)';
+  }
+
+  async function refreshAiLogs(lines=10){
+    const r=await fetch(`/api/ai/logs?lines=${lines}`);
+    const j=await r.json();
+    setAiLog(j.tail || '(no logs)');
+  }
+
   async function updateAiStatus(){
     const r=await fetch('/api/ai/status');
     const j=await r.json();
     document.getElementById('aiStatus').textContent=j.running?'RUNNING':'STOPPED';
+    if(j.log_tail) setAiLog(j.log_tail);
   }
 
-  async function aiStart(){ await fetch('/api/ai/start',{method:'POST'}); await updateAiStatus(); }
-  async function aiStop(){ await fetch('/api/ai/stop',{method:'POST'}); await updateAiStatus(); }
+  async function aiStart(){
+    const r=await fetch('/api/ai/start',{method:'POST'});
+    const j=await r.json();
+    document.getElementById('aiStatus').textContent=j.running?'RUNNING':'STOPPED';
+    setAiLog(j.log_tail || '(no logs)');
+  }
+
+  async function aiStop(){
+    const r=await fetch('/api/ai/stop',{method:'POST'});
+    const j=await r.json();
+    document.getElementById('aiStatus').textContent=j.running?'RUNNING':'STOPPED';
+    setAiLog(j.log_tail || '(no logs)');
+  }
 
   async function loadConfig(){
     const r=await fetch('/api/config/load',{method:'POST'});
@@ -242,6 +271,7 @@
   document.getElementById('legacyRun').onclick=runLegacyBacktester;
   document.getElementById('aiStart').onclick=aiStart;
   document.getElementById('aiStop').onclick=aiStop;
+  document.getElementById('aiLogRefresh').onclick=()=>refreshAiLogs(10);
   document.getElementById('aiCfgReload').onclick=reloadAiCfg;
   document.getElementById('aiCfgSave').onclick=saveAiCfg;
   document.getElementById('secSave').onclick=saveSecrets;
@@ -249,6 +279,7 @@
   setupSymbols();
   loadChart('{{ default_symbol }}');
   updateAiStatus();
+  refreshAiLogs(10);
 </script>
 </body>
 </html>
