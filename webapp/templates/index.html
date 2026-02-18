@@ -1,0 +1,116 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Binance Trading Bot - Web UI</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body{font-family:Arial,Helvetica,sans-serif;margin:20px;background:#f6f7fb}
+    .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+    .card{background:white;border-radius:12px;padding:16px;margin-bottom:16px;box-shadow:0 2px 8px rgba(0,0,0,.06)}
+    button{padding:8px 12px;border:0;border-radius:8px;background:#2b6cb0;color:#fff;cursor:pointer}
+    input,select{padding:8px;border:1px solid #ddd;border-radius:8px}
+    pre{background:#111;color:#ddd;padding:12px;border-radius:8px;overflow:auto}
+  </style>
+</head>
+<body>
+  <h1>Binance Trading Bot Web UI</h1>
+  <div class="card row">
+    <label>Symbol</label>
+    <select id="symbol"></select>
+    <button id="refreshBtn">Refresh Charts</button>
+    <button id="configBtn">Config</button>
+    <button id="backtestBtn">Backtester</button>
+    <span>Last refresh: <b id="lastRefresh">{{ last_refresh }}</b></span>
+  </div>
+
+  <div class="card">
+    <canvas id="priceChart" height="100"></canvas>
+  </div>
+
+  <div class="card" id="configPanel" style="display:none;">
+    <h3>Config</h3>
+    <div class="row"><label>Symbols(csv)</label><input id="cfgSymbols" style="width:420px"></div>
+    <div class="row"><label>Timeframe</label><input id="cfgTf"></div>
+    <div class="row"><label>History Limit</label><input id="cfgLimit" type="number"></div>
+    <div class="row"><label>Refresh Cron</label><input id="cfgCron"></div>
+    <div class="row"><button id="cfgLoad">Load</button><button id="cfgSave">Save</button></div>
+  </div>
+
+  <div class="card" id="backtestPanel" style="display:none;">
+    <h3>Backtester (SMA crossover ROI simulation)</h3>
+    <div class="row"><label>Fast</label><input id="btFast" type="number" value="20"><label>Slow</label><input id="btSlow" type="number" value="60"><button id="btRun">Run</button></div>
+    <pre id="btOut">(no results)</pre>
+  </div>
+
+<script>
+  const initialConfig = {{ config | tojson }};
+  let chart;
+
+  function setupSymbols(){
+    const sel=document.getElementById('symbol');
+    sel.innerHTML='';
+    (initialConfig.symbols||[]).forEach(s=>{
+      const o=document.createElement('option');o.value=s;o.textContent=s;sel.appendChild(o);
+    });
+    sel.value='{{ default_symbol }}';
+    sel.addEventListener('change',()=>loadChart(sel.value));
+  }
+
+  async function loadChart(symbol){
+    const r=await fetch(`/api/charts?symbol=${encodeURIComponent(symbol)}`);
+    const j=await r.json();
+    const ctx=document.getElementById('priceChart');
+    if(chart) chart.destroy();
+    chart=new Chart(ctx,{type:'line',data:{labels:j.labels,datasets:[{label:j.symbol,data:j.values,borderColor:'#2b6cb0',pointRadius:0}]}});
+  }
+
+  async function refreshCharts(){
+    const symbols=[document.getElementById('symbol').value];
+    const r=await fetch('/api/charts/refresh',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbols})});
+    const j=await r.json();
+    document.getElementById('lastRefresh').textContent=j.last_refresh||'';
+    await loadChart(symbols[0]);
+  }
+
+  async function loadConfig(){
+    const r=await fetch('/api/config/load',{method:'POST'});
+    const j=await r.json();
+    const c=j.config;
+    document.getElementById('cfgSymbols').value=(c.symbols||[]).join(', ');
+    document.getElementById('cfgTf').value=c.timeframe;
+    document.getElementById('cfgLimit').value=c.history_limit;
+    document.getElementById('cfgCron').value=c.refresh_cron;
+  }
+
+  async function saveConfig(){
+    const payload={...initialConfig};
+    payload.symbols=document.getElementById('cfgSymbols').value.split(',').map(x=>x.trim()).filter(Boolean);
+    payload.timeframe=document.getElementById('cfgTf').value;
+    payload.history_limit=parseInt(document.getElementById('cfgLimit').value,10);
+    payload.refresh_cron=document.getElementById('cfgCron').value;
+    await fetch('/api/config/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    alert('Config saved. Reload page recommended.');
+  }
+
+  async function runBacktest(){
+    const symbol=document.getElementById('symbol').value;
+    const payload={symbol,fast_window:parseInt(document.getElementById('btFast').value,10),slow_window:parseInt(document.getElementById('btSlow').value,10)};
+    const r=await fetch('/api/backtester/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    const j=await r.json();
+    document.getElementById('btOut').textContent=JSON.stringify(j,null,2);
+  }
+
+  document.getElementById('refreshBtn').onclick=refreshCharts;
+  document.getElementById('configBtn').onclick=()=>{const p=document.getElementById('configPanel');p.style.display=p.style.display==='none'?'block':'none';};
+  document.getElementById('backtestBtn').onclick=()=>{const p=document.getElementById('backtestPanel');p.style.display=p.style.display==='none'?'block':'none';};
+  document.getElementById('cfgLoad').onclick=loadConfig;
+  document.getElementById('cfgSave').onclick=saveConfig;
+  document.getElementById('btRun').onclick=runBacktest;
+
+  setupSymbols();
+  loadChart('{{ default_symbol }}');
+</script>
+</body>
+</html>

@@ -1,22 +1,59 @@
-# Binance Spot Auto-Trading Bot (with GUI Config)
+# Binance Trading Bot — Web Architecture Redesign
 
-**Features**
-- Spot-only (no futures), Binance via `ccxt`
-- Regime-aware strategy (Trend/Range) with ATR-based risk
-- GUI (`gui.py`) to edit `config.yaml`, test Telegram, and **Start/Stop** the bot
-- CSV logging to `./logs`, optional Telegram alerts
+This branch introduces a new modular **web-first architecture** to make feature extension easier.
 
-## Quick Start
+## New architecture (`webapp/`)
+
+- `webapp/app.py` — FastAPI server (UI + APIs)
+- `webapp/models.py` — typed request/config models
+- `webapp/config_manager.py` — load/save YAML config
+- `webapp/storage.py` — SQLite cache for OHLCV + metadata
+- `webapp/chart_service.py` — Binance OHLCV fetch + daily/manual refresh
+- `webapp/backtest_service.py` — ROI simulator (SMA crossover)
+- `webapp/templates/index.html` — main dashboard UI
+
+## Implemented requested features
+
+1. **Web based UI server**
+   - FastAPI + Jinja UI
+2. **Main page coin price chart**
+   - Select symbol chart on main page
+   - Daily refresh via scheduler (`refresh_cron`)
+   - Manual **Refresh Charts** button
+3. **Config button**
+   - Load config to panel
+   - Save edited options to YAML config file
+4. **Backtester button**
+   - Run ROI simulation from UI
+   - Shows ROI, drawdown, trades, equity curve data in result panel
+
+## Run
+
 ```bash
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-python gui.py
+chmod +x run_web_ui.sh
+./run_web_ui.sh
 ```
-1) In the GUI, fill API keys (withdrawal OFF, IP whitelist recommended), set parameters.
-2) Click **Save Config** then **Start Bot** (starts `main.py` as a background process).
-3) Start with **Dry-Run** ON. After several days, switch to live.
 
-## Notes
-- Requires Python 3.9+
-- On servers without display, use `xvfb` or edit `config.yaml` manually and run `python main.py`.
-- See comments in `config.yaml` for all parameters.
+Default URL: `http://127.0.0.1:8080`
+
+## Config file
+
+`web_config.yaml` is auto-created on first run.
+
+Core fields:
+- `symbols`
+- `timeframe`
+- `history_limit`
+- `refresh_cron` (daily scheduler)
+- `starting_capital`
+- `fee_rate`
+
+## API quick reference
+
+- `GET /api/config`
+- `POST /api/config/load`
+- `POST /api/config/save`
+- `GET /api/charts?symbol=BTC/USDT`
+- `POST /api/charts/refresh`
+- `POST /api/backtester/run`
+- `GET /api/health`
