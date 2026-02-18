@@ -441,6 +441,156 @@ def mean_reversion_backtest(
     return usdt, buy_indices, sell_indices, buy_amounts, sell_amounts
 
 
+def pivot_reversal_backtest(
+    df: pd.DataFrame,
+    lookback: int = 20,
+    rebound_pct: float = 0.01,
+    pullback_pct: float = 0.01,
+    rsi_window: int = 14,
+    rsi_low: float = 35.0,
+    rsi_high: float = 65.0,
+    ema_fast_window: int = 8,
+    ema_slow_window: int = 21,
+    adx_window: int = 14,
+    adx_threshold: float = 20.0,
+    atr_window: int = 14,
+    atr_pct_threshold: float = 0.012,
+    split_count: int = 3,
+    capital: float = 10_000.0,
+    currency_rate: float = 1.1,
+    fee: float = 0.001,
+    slippage: float = 0.0005,
+    spread: float = 0.0005,
+) -> Tuple[float, List[int], List[int], List[float], List[float]]:
+    """Pivot-reversal backtest with split entries/exits and sideways filter."""
+    usdt = capital * currency_rate
+    coins = 0.0
+    buy_indices: List[int] = []
+    sell_indices: List[int] = []
+    buy_amounts: List[float] = []
+    sell_amounts: List[float] = []
+
+    if split_count < 1:
+        split_count = 1
+
+    close = df["close"]
+    high = df["high"]
+    low = df["low"]
+    ema_fast = ta.trend.ema_indicator(close, window=ema_fast_window)
+    ema_slow = ta.trend.ema_indicator(close, window=ema_slow_window)
+    rsi = ta.momentum.rsi(close, window=rsi_window)
+    adx = ta.trend.adx(high, low, close, window=adx_window)
+    atr = ta.volatility.average_true_range(high, low, close, window=atr_window)
+    atr_pct = atr / close
+
+    rolling_low = close.rolling(lookback).min()
+    rolling_high = close.rolling(lookback).max()
+
+    buy_tranches = 0
+    sell_tranches = 0
+    position_budget = 0.0
+    tranche_budget = 0.0
+
+    for i in range(1, len(df)):
+        if (
+            pd.isna(rolling_low.iloc[i])
+            or pd.isna(rolling_high.iloc[i])
+            or pd.isna(rsi.iloc[i])
+            or pd.isna(ema_fast.iloc[i])
+            or pd.isna(ema_slow.iloc[i])
+            or pd.isna(adx.iloc[i])
+            or pd.isna(atr_pct.iloc[i])
+        ):
+            continue
+
+        sideways = adx.iloc[i] < adx_threshold and atr_pct.iloc[i] < atr_pct_threshold
+        if sideways:
+            continue
+
+        rebound_line = rolling_low.iloc[i] * (1 + rebound_pct)
+        rebound_line_prev = rolling_low.iloc[i - 1] * (1 + rebound_pct)
+        pullback_line = rolling_high.iloc[i] * (1 - pullback_pct)
+        pullback_line_prev = rolling_high.iloc[i - 1] * (1 - pullback_pct)
+
+        buy_signal = (
+            close.iloc[i] > rebound_line
+            and close.iloc[i - 1] <= rebound_line_prev
+            and rsi.iloc[i] > rsi.iloc[i - 1]
+            and rsi.iloc[i - 1] <= rsi_low
+            and ema_fast.iloc[i] >= ema_fast.iloc[i - 1]
+        )
+        sell_signal = (
+            close.iloc[i] < pullback_line
+            and close.iloc[i - 1] >= pullback_line_prev
+            and rsi.iloc[i] < rsi.iloc[i - 1]
+            and rsi.iloc[i - 1] >= rsi_high
+            and ema_fast.iloc[i] <= ema_fast.iloc[i - 1]
+        )
+
+        if buy_signal and buy_tranches < split_count and usdt > 0:
+            if coins == 0 and buy_tranches == 0:
+                position_budget = usdt
+                tranche_budget = position_budget / split_count
+                sell_tranches = 0
+            amount_to_invest = min(tranche_budget, usdt)
+            if amount_to_invest > 0:
+                ask_price = close.iloc[i] * (1 + spread / 2)
+                trade_price = ask_price * (1 + slippage)
+                coins_purchased = (amount_to_invest / trade_price) * (1 - fee)
+                coins += coins_purchased
+                usdt -= amount_to_invest
+                buy_indices.append(i)
+                buy_amounts.append(coins_purchased)
+                buy_tranches += 1
+                logger.debug(
+                    "Pivot buy %s: price=%.5f rebound_line=%.5f rsi=%.2f tranche=%s/%s",
+                    i,
+                    close.iloc[i],
+                    rebound_line,
+                    rsi.iloc[i],
+                    buy_tranches,
+                    split_count,
+                )
+
+        if sell_signal and coins > 0 and sell_tranches < split_count:
+            remaining_tranches = split_count - sell_tranches
+            sell_coins = coins / remaining_tranches
+            sell_coins = min(sell_coins, coins)
+            if sell_coins > 0:
+                bid_price = close.iloc[i] * (1 - spread / 2)
+                trade_price = bid_price * (1 - slippage)
+                usdt += sell_coins * trade_price * (1 - fee)
+                coins -= sell_coins
+                sell_indices.append(i)
+                sell_amounts.append(sell_coins)
+                sell_tranches += 1
+                if coins == 0:
+                    buy_tranches = 0
+                    sell_tranches = 0
+                    position_budget = 0.0
+                    tranche_budget = 0.0
+                logger.debug(
+                    "Pivot sell %s: price=%.5f pullback_line=%.5f rsi=%.2f tranche=%s/%s",
+                    i,
+                    close.iloc[i],
+                    pullback_line,
+                    rsi.iloc[i],
+                    sell_tranches,
+                    split_count,
+                )
+
+    if coins > 0:
+        final_price = close.iloc[-1]
+        bid_price = final_price * (1 - spread / 2)
+        trade_price = bid_price * (1 - slippage)
+        usdt += coins * trade_price * (1 - fee)
+        sell_indices.append(len(df) - 1)
+        sell_amounts.append(coins)
+        coins = 0.0
+
+    return usdt, buy_indices, sell_indices, buy_amounts, sell_amounts
+
+
 def run_backtests(
     symbols: List[str],
     timeframe: str,
@@ -460,6 +610,19 @@ def run_backtests(
     buy_threshold: float = 0.02,
     sell_threshold: float = 0.02,
     min_trade_confidence: float = 0.65,
+    pivot_lookback: int = 20,
+    pivot_rebound_pct: float = 0.012,
+    pivot_pullback_pct: float = 0.012,
+    pivot_rsi_window: int = 14,
+    pivot_rsi_low: float = 30.0,
+    pivot_rsi_high: float = 70.0,
+    pivot_ema_fast: int = 9,
+    pivot_ema_slow: int = 21,
+    pivot_adx_window: int = 14,
+    pivot_adx_threshold: float = 18.0,
+    pivot_atr_window: int = 14,
+    pivot_atr_pct_threshold: float = 0.01,
+    pivot_split_count: int = 3,
 ) -> None:
     """Fetch data for each symbol and run backtests with parameter optimisation.
 
@@ -531,7 +694,7 @@ def run_backtests(
                     "total_bought": total_bought,
                     "total_sold": total_sold,
                 })
-        else:
+        elif strategy == "ml":
             final_usdt, buys, sells, buy_amts, sell_amts = ml_pattern_backtest(
                 df,
                 holding_period_bars=holding_period_bars,
@@ -552,6 +715,41 @@ def run_backtests(
                 "symbol": symbol,
                 "window": holding_period_bars,
                 "threshold": buy_threshold,
+                "roi": roi,
+                "buys": len(buys),
+                "sells": len(sells),
+                "total_bought": total_bought,
+                "total_sold": total_sold,
+            })
+        else:
+            final_usdt, buys, sells, buy_amts, sell_amts = pivot_reversal_backtest(
+                df,
+                lookback=pivot_lookback,
+                rebound_pct=pivot_rebound_pct,
+                pullback_pct=pivot_pullback_pct,
+                rsi_window=pivot_rsi_window,
+                rsi_low=pivot_rsi_low,
+                rsi_high=pivot_rsi_high,
+                ema_fast_window=pivot_ema_fast,
+                ema_slow_window=pivot_ema_slow,
+                adx_window=pivot_adx_window,
+                adx_threshold=pivot_adx_threshold,
+                atr_window=pivot_atr_window,
+                atr_pct_threshold=pivot_atr_pct_threshold,
+                split_count=pivot_split_count,
+                fee=fee,
+                slippage=slippage,
+                spread=spread,
+            )
+            initial_usdt = 10_000.0 * 1.1
+            roi = (final_usdt - initial_usdt) / initial_usdt * 100
+            plot_trades(df, buys, sells, symbol, pivot_lookback, pivot_rebound_pct)
+            total_bought = sum(buy_amts)
+            total_sold = sum(sell_amts)
+            results.append({
+                "symbol": symbol,
+                "window": pivot_lookback,
+                "threshold": pivot_rebound_pct,
                 "roi": roi,
                 "buys": len(buys),
                 "sells": len(sells),
@@ -610,9 +808,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--strategy",
-        choices=["mean_reversion", "ml"],
+        choices=["mean_reversion", "ml", "pivot_reversal"],
         default="mean_reversion",
-        help="Strategy to run: 'mean_reversion' or 'ml' (default: mean_reversion)",
+        help="Strategy to run: 'mean_reversion', 'ml', or 'pivot_reversal' (default: mean_reversion)",
     )
     parser.add_argument(
         "--holding-period-bars",
@@ -643,6 +841,84 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=0.65,
         help="Minimum predicted probability required to trade in ML strategy (default: 0.65)",
+    )
+    parser.add_argument(
+        "--pivot-lookback",
+        type=int,
+        default=20,
+        help="Lookback window for pivot detection in pivot_reversal strategy (default: 20)",
+    )
+    parser.add_argument(
+        "--pivot-rebound-pct",
+        type=float,
+        default=0.012,
+        help="Percent rebound from rolling low to trigger buys (default: 0.012 = 1.2%)",
+    )
+    parser.add_argument(
+        "--pivot-pullback-pct",
+        type=float,
+        default=0.012,
+        help="Percent pullback from rolling high to trigger sells (default: 0.012 = 1.2%)",
+    )
+    parser.add_argument(
+        "--pivot-rsi-window",
+        type=int,
+        default=14,
+        help="RSI window for pivot_reversal strategy (default: 14)",
+    )
+    parser.add_argument(
+        "--pivot-rsi-low",
+        type=float,
+        default=30.0,
+        help="RSI oversold threshold for pivot_reversal strategy (default: 30)",
+    )
+    parser.add_argument(
+        "--pivot-rsi-high",
+        type=float,
+        default=70.0,
+        help="RSI overbought threshold for pivot_reversal strategy (default: 70)",
+    )
+    parser.add_argument(
+        "--pivot-ema-fast",
+        type=int,
+        default=9,
+        help="Fast EMA window for pivot_reversal strategy (default: 9)",
+    )
+    parser.add_argument(
+        "--pivot-ema-slow",
+        type=int,
+        default=21,
+        help="Slow EMA window for pivot_reversal strategy (default: 21)",
+    )
+    parser.add_argument(
+        "--pivot-adx-window",
+        type=int,
+        default=14,
+        help="ADX window for sideways filter (default: 14)",
+    )
+    parser.add_argument(
+        "--pivot-adx-threshold",
+        type=float,
+        default=18.0,
+        help="ADX threshold for sideways filter (default: 18)",
+    )
+    parser.add_argument(
+        "--pivot-atr-window",
+        type=int,
+        default=14,
+        help="ATR window for sideways filter (default: 14)",
+    )
+    parser.add_argument(
+        "--pivot-atr-pct-threshold",
+        type=float,
+        default=0.01,
+        help="ATR%% threshold for sideways filter (default: 0.01 = 1%%)",
+    )
+    parser.add_argument(
+        "--pivot-split-count",
+        type=int,
+        default=3,
+        help="Number of split entries/exits (default: 3)",
     )
     parser.add_argument(
         "--thresholds",
@@ -725,6 +1001,19 @@ def main() -> None:
         buy_threshold=args.buy_threshold,
         sell_threshold=args.sell_threshold,
         min_trade_confidence=args.min_trade_confidence,
+        pivot_lookback=args.pivot_lookback,
+        pivot_rebound_pct=args.pivot_rebound_pct,
+        pivot_pullback_pct=args.pivot_pullback_pct,
+        pivot_rsi_window=args.pivot_rsi_window,
+        pivot_rsi_low=args.pivot_rsi_low,
+        pivot_rsi_high=args.pivot_rsi_high,
+        pivot_ema_fast=args.pivot_ema_fast,
+        pivot_ema_slow=args.pivot_ema_slow,
+        pivot_adx_window=args.pivot_adx_window,
+        pivot_adx_threshold=args.pivot_adx_threshold,
+        pivot_atr_window=args.pivot_atr_window,
+        pivot_atr_pct_threshold=args.pivot_atr_pct_threshold,
+        pivot_split_count=args.pivot_split_count,
     )
 
 
