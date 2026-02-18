@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -95,6 +96,14 @@ def _load_ai_config_text() -> str:
 def _save_ai_config_text(raw: str) -> None:
     data = yaml.safe_load(raw) or {}
     AI_CONFIG_PATH.write_text(yaml.safe_dump(data, sort_keys=False))
+
+
+def _clean_console_output(text: str) -> str:
+    # Remove ANSI escape sequences and normalize carriage-return updates.
+    text = re.sub(r"\x1B\[[0-?]*[ -/]*[@-~]", "", text or "")
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    lines = [ln.rstrip() for ln in text.split("\n")]
+    return "\n".join(lines).strip()
 
 
 @app.on_event("startup")
@@ -230,7 +239,10 @@ def run_legacy_backtester(payload: Dict = Body(...)):
 
     cmd = legacy_build_command(values)
     proc = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True)
-    output = (proc.stdout or "").strip() or (proc.stderr or "").strip()
+    raw_output = (proc.stdout or "")
+    if not raw_output.strip():
+        raw_output = proc.stderr or ""
+    output = _clean_console_output(raw_output)
     plots = list_plot_files()
     return {
         "ok": proc.returncode == 0,

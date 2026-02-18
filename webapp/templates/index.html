@@ -183,7 +183,8 @@
     };
     const r=await fetch('/api/legacy/backtester/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
     const j=await r.json();
-    document.getElementById('legacyOut').textContent=JSON.stringify(j,null,2);
+    const header = `ok=${j.ok} returncode=${j.returncode}`;
+    document.getElementById('legacyOut').textContent=header + "\n\n" + (j.output || '(no output)');
     const div=document.getElementById('plots'); div.innerHTML='';
     (j.plots||[]).slice(0,8).forEach(p=>{
       const img=document.createElement('img'); img.src='/plots/'+encodeURIComponent(p); img.className='plot'; img.alt=p; div.appendChild(img);
