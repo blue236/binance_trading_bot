@@ -3,6 +3,7 @@ set -euo pipefail
 
 python3 -m venv .venv
 source .venv/bin/activate
+pip install --upgrade pip setuptools wheel
 pip install -r requirements.txt
 
 HOST="${BTB_WEB_HOST:-127.0.0.1}"
