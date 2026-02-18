@@ -3,58 +3,108 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Binance Trading Bot - Web UI</title>
+  <title>Binance Trading Bot - Unified Web UI</title>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <style>
     body{font-family:Arial,Helvetica,sans-serif;margin:20px;background:#f6f7fb}
+    .tabs{display:flex;gap:8px;margin-bottom:12px}
+    .tab-btn{padding:10px 14px;border:1px solid #ccc;background:#fff;border-radius:8px;cursor:pointer}
+    .tab-btn.active{background:#2b6cb0;color:#fff;border-color:#2b6cb0}
+    .tab{display:none}.tab.active{display:block}
     .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
     .card{background:white;border-radius:12px;padding:16px;margin-bottom:16px;box-shadow:0 2px 8px rgba(0,0,0,.06)}
     button{padding:8px 12px;border:0;border-radius:8px;background:#2b6cb0;color:#fff;cursor:pointer}
-    input,select{padding:8px;border:1px solid #ddd;border-radius:8px}
-    pre{background:#111;color:#ddd;padding:12px;border-radius:8px;overflow:auto}
+    input,select,textarea{padding:8px;border:1px solid #ddd;border-radius:8px}
+    textarea{width:100%;min-height:320px;font-family:monospace}
+    pre{background:#111;color:#ddd;padding:12px;border-radius:8px;overflow:auto;white-space:pre-wrap}
+    .muted{color:#666}
+    img.plot{max-width:280px;border:1px solid #ddd;border-radius:8px;margin:6px}
   </style>
 </head>
 <body>
-  <h1>Binance Trading Bot Web UI</h1>
-  <div class="card row">
-    <label>Symbol</label>
-    <select id="symbol"></select>
-    <button id="refreshBtn">Refresh Charts</button>
-    <button id="configBtn">Config</button>
-    <button id="backtestBtn">Backtester</button>
-    <span>Last refresh: <b id="lastRefresh">{{ last_refresh }}</b></span>
+  <h1>Binance Trading Bot — Unified Web UI</h1>
+
+  <div class="tabs">
+    <button class="tab-btn active" data-tab="aiTab">AI Trading</button>
+    <button class="tab-btn" data-tab="backtesterTab">Backtester</button>
   </div>
 
-  <div class="card">
-    <canvas id="priceChart" height="100"></canvas>
-  </div>
+  <section id="aiTab" class="tab active">
+    <div class="card row">
+      <strong>AI bot status:</strong> <span id="aiStatus">{{ 'RUNNING' if ai_running else 'STOPPED' }}</span>
+      <button id="aiStart">Start Bot</button>
+      <button id="aiStop">Stop Bot</button>
+      <span class="muted">(uses existing main.py)</span>
+    </div>
 
-  <div class="card" id="configPanel" style="display:none;">
-    <h3>Config</h3>
-    <div class="row"><label>Symbols(csv)</label><input id="cfgSymbols" style="width:420px"></div>
-    <div class="row"><label>Timeframe</label><input id="cfgTf"></div>
-    <div class="row"><label>History Limit</label><input id="cfgLimit" type="number"></div>
-    <div class="row"><label>Refresh Cron</label><input id="cfgCron"></div>
-    <div class="row"><button id="cfgLoad">Load</button><button id="cfgSave">Save</button></div>
-  </div>
+    <div class="card row">
+      <label>Symbol</label>
+      <select id="symbol"></select>
+      <button id="refreshBtn">Refresh Charts</button>
+      <button id="configBtn">Config Panel</button>
+      <span>Last refresh: <b id="lastRefresh">{{ last_refresh }}</b></span>
+    </div>
 
-  <div class="card" id="backtestPanel" style="display:none;">
-    <h3>Backtester (SMA crossover ROI simulation)</h3>
-    <div class="row"><label>Fast</label><input id="btFast" type="number" value="20"><label>Slow</label><input id="btSlow" type="number" value="60"><button id="btRun">Run</button></div>
-    <pre id="btOut">(no results)</pre>
-  </div>
+    <div class="card">
+      <canvas id="priceChart" height="100"></canvas>
+    </div>
+
+    <div class="card" id="configPanel" style="display:none;">
+      <h3>Web UI Config</h3>
+      <div class="row"><label>Symbols(csv)</label><input id="cfgSymbols" style="width:420px"></div>
+      <div class="row"><label>Timeframe</label><input id="cfgTf"></div>
+      <div class="row"><label>History Limit</label><input id="cfgLimit" type="number"></div>
+      <div class="row"><label>Refresh Cron</label><input id="cfgCron"></div>
+      <div class="row"><button id="cfgLoad">Load</button><button id="cfgSave">Save</button></div>
+
+      <hr>
+      <h3>Legacy AI bot config.yaml editor (main.py)</h3>
+      <textarea id="aiCfgRaw">{{ ai_config_text }}</textarea>
+      <div class="row"><button id="aiCfgReload">Reload config.yaml</button><button id="aiCfgSave">Save config.yaml</button></div>
+    </div>
+  </section>
+
+  <section id="backtesterTab" class="tab">
+    <div class="card">
+      <h3>Quick ROI Backtester (new service)</h3>
+      <div class="row"><label>Symbol</label><select id="btSymbol"></select><label>Fast</label><input id="btFast" type="number" value="20"><label>Slow</label><input id="btSlow" type="number" value="60"><button id="btRun">Run</button></div>
+      <pre id="btOut">(no results)</pre>
+    </div>
+
+    <div class="card">
+      <h3>Legacy backtester.py runner (compatible)</h3>
+      <div class="row"><label>Symbols</label><input id="lSymbols" value="{{ legacy_backtester_defaults['symbols'] }}" style="width:240px"><label>Timeframe</label><input id="lTf" value="{{ legacy_backtester_defaults['timeframe'] }}"><label>Limit</label><input id="lLimit" value="{{ legacy_backtester_defaults['limit'] }}"></div>
+      <div class="row"><label>Windows</label><input id="lWin" value="{{ legacy_backtester_defaults['windows'] }}"><label>Thresholds</label><input id="lThr" value="{{ legacy_backtester_defaults['thresholds'] }}"><label>Strategy</label><input id="lStrategy" value="{{ legacy_backtester_defaults['strategy'] }}"></div>
+      <div class="row"><button id="legacyRun">Run legacy backtester.py</button></div>
+      <pre id="legacyOut">(no legacy run yet)</pre>
+      <div id="plots"></div>
+    </div>
+  </section>
 
 <script>
   const initialConfig = {{ config | tojson }};
   let chart;
 
+  // Tabs
+  document.querySelectorAll('.tab-btn').forEach(btn=>{
+    btn.onclick=()=>{
+      document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
+      document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById(btn.dataset.tab).classList.add('active');
+    }
+  });
+
   function setupSymbols(){
     const sel=document.getElementById('symbol');
-    sel.innerHTML='';
+    const bt=document.getElementById('btSymbol');
+    sel.innerHTML=''; bt.innerHTML='';
     (initialConfig.symbols||[]).forEach(s=>{
       const o=document.createElement('option');o.value=s;o.textContent=s;sel.appendChild(o);
+      const o2=document.createElement('option');o2.value=s;o2.textContent=s;bt.appendChild(o2);
     });
     sel.value='{{ default_symbol }}';
+    bt.value='{{ default_symbol }}';
     sel.addEventListener('change',()=>loadChart(sel.value));
   }
 
@@ -74,6 +124,15 @@
     await loadChart(symbols[0]);
   }
 
+  async function updateAiStatus(){
+    const r=await fetch('/api/ai/status');
+    const j=await r.json();
+    document.getElementById('aiStatus').textContent=j.running?'RUNNING':'STOPPED';
+  }
+
+  async function aiStart(){ await fetch('/api/ai/start',{method:'POST'}); await updateAiStatus(); }
+  async function aiStop(){ await fetch('/api/ai/stop',{method:'POST'}); await updateAiStatus(); }
+
   async function loadConfig(){
     const r=await fetch('/api/config/load',{method:'POST'});
     const j=await r.json();
@@ -91,26 +150,60 @@
     payload.history_limit=parseInt(document.getElementById('cfgLimit').value,10);
     payload.refresh_cron=document.getElementById('cfgCron').value;
     await fetch('/api/config/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-    alert('Config saved. Reload page recommended.');
+    alert('Web config saved. Reload page recommended.');
+  }
+
+  async function reloadAiCfg(){
+    const r=await fetch('/api/ai/config');
+    const j=await r.json();
+    document.getElementById('aiCfgRaw').value=j.text||'';
+  }
+  async function saveAiCfg(){
+    const text=document.getElementById('aiCfgRaw').value;
+    await fetch('/api/ai/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text})});
+    alert('config.yaml saved for main.py');
   }
 
   async function runBacktest(){
-    const symbol=document.getElementById('symbol').value;
+    const symbol=document.getElementById('btSymbol').value;
     const payload={symbol,fast_window:parseInt(document.getElementById('btFast').value,10),slow_window:parseInt(document.getElementById('btSlow').value,10)};
     const r=await fetch('/api/backtester/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
     const j=await r.json();
     document.getElementById('btOut').textContent=JSON.stringify(j,null,2);
   }
 
+  async function runLegacyBacktester(){
+    const payload={
+      symbols:document.getElementById('lSymbols').value,
+      timeframe:document.getElementById('lTf').value,
+      limit:document.getElementById('lLimit').value,
+      windows:document.getElementById('lWin').value,
+      thresholds:document.getElementById('lThr').value,
+      strategy:document.getElementById('lStrategy').value,
+    };
+    const r=await fetch('/api/legacy/backtester/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    const j=await r.json();
+    document.getElementById('legacyOut').textContent=JSON.stringify(j,null,2);
+    const div=document.getElementById('plots'); div.innerHTML='';
+    (j.plots||[]).slice(0,8).forEach(p=>{
+      const img=document.createElement('img'); img.src='/plots/'+encodeURIComponent(p); img.className='plot'; img.alt=p; div.appendChild(img);
+    })
+  }
+
   document.getElementById('refreshBtn').onclick=refreshCharts;
   document.getElementById('configBtn').onclick=()=>{const p=document.getElementById('configPanel');p.style.display=p.style.display==='none'?'block':'none';};
-  document.getElementById('backtestBtn').onclick=()=>{const p=document.getElementById('backtestPanel');p.style.display=p.style.display==='none'?'block':'none';};
   document.getElementById('cfgLoad').onclick=loadConfig;
   document.getElementById('cfgSave').onclick=saveConfig;
   document.getElementById('btRun').onclick=runBacktest;
+  document.getElementById('legacyRun').onclick=runLegacyBacktester;
+  document.getElementById('aiStart').onclick=aiStart;
+  document.getElementById('aiStop').onclick=aiStop;
+  document.getElementById('aiCfgReload').onclick=reloadAiCfg;
+  document.getElementById('aiCfgSave').onclick=saveAiCfg;
 
   setupSymbols();
   loadChart('{{ default_symbol }}');
+  updateAiStatus();
 </script>
 </body>
 </html>

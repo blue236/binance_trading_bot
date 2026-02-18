@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import os
+import signal
+import subprocess
+import sys
 from pathlib import Path
 from typing import Dict
 
+import yaml
 from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI, Body, Request
 from fastapi.responses import HTMLResponse
@@ -16,16 +20,24 @@ from .storage import Storage
 from .chart_service import ChartService
 from .backtest_service import BacktestService
 
+# Reuse legacy backtester web helpers to stay compatible with existing CLI options.
+from web_backtester_ui import DEFAULTS as LEGACY_BT_DEFAULTS, build_command as legacy_build_command, validate_values as legacy_validate_values, list_plot_files
+
 BASE = Path(__file__).resolve().parent
+ROOT = BASE.parent
 (BASE / "static").mkdir(parents=True, exist_ok=True)
+
+AI_CONFIG_PATH = ROOT / "config.yaml"
+AI_PID_FILE = ROOT / ".web_ai_bot.pid"
 
 config_mgr = ConfigManager(os.environ.get("BTB_WEB_CONFIG", "web_config.yaml"))
 storage = Storage(os.environ.get("BTB_WEB_DB", "webapp_state.sqlite"))
 chart_service = ChartService(storage)
 backtest_service = BacktestService(storage)
 
-app = FastAPI(title="Binance Trading Bot Web UI", version="2.0")
+app = FastAPI(title="Binance Trading Bot Web UI", version="2.1")
 app.mount("/static", StaticFiles(directory=str(BASE / "static"), check_dir=False), name="static")
+app.mount("/plots", StaticFiles(directory=str(ROOT / "plots"), check_dir=False), name="plots")
 templates = Jinja2Templates(directory=str(BASE / "templates"))
 
 scheduler: BackgroundScheduler | None = None
@@ -34,6 +46,55 @@ scheduler: BackgroundScheduler | None = None
 def parse_cron(expr: str):
     m, h, dom, mon, dow = expr.split()
     return dict(minute=m, hour=h, day=dom, month=mon, day_of_week=dow)
+
+
+def _is_ai_running() -> bool:
+    if not AI_PID_FILE.exists():
+        return False
+    try:
+        pid = int(AI_PID_FILE.read_text().strip())
+        os.kill(pid, 0)
+        return True
+    except Exception:
+        return False
+
+
+def _start_ai_bot() -> None:
+    if _is_ai_running():
+        return
+    proc = subprocess.Popen(
+        [sys.executable, "main.py"],
+        cwd=str(ROOT),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.STDOUT,
+    )
+    AI_PID_FILE.write_text(str(proc.pid))
+
+
+def _stop_ai_bot() -> None:
+    if not AI_PID_FILE.exists():
+        return
+    try:
+        pid = int(AI_PID_FILE.read_text().strip())
+        os.kill(pid, signal.SIGTERM)
+    except Exception:
+        pass
+    finally:
+        try:
+            AI_PID_FILE.unlink()
+        except Exception:
+            pass
+
+
+def _load_ai_config_text() -> str:
+    if not AI_CONFIG_PATH.exists():
+        return ""
+    return AI_CONFIG_PATH.read_text()
+
+
+def _save_ai_config_text(raw: str) -> None:
+    data = yaml.safe_load(raw) or {}
+    AI_CONFIG_PATH.write_text(yaml.safe_dump(data, sort_keys=False))
 
 
 @app.on_event("startup")
@@ -66,9 +127,12 @@ def index(request: Request):
         {
             "request": request,
             "config": cfg.model_dump(),
+            "legacy_backtester_defaults": LEGACY_BT_DEFAULTS,
             "default_symbol": symbol,
             "series": series,
             "last_refresh": storage.get_meta("last_chart_refresh") or "(never)",
+            "ai_running": _is_ai_running(),
+            "ai_config_text": _load_ai_config_text(),
         },
     )
 
@@ -122,6 +186,58 @@ def run_backtester(req: BacktestRequest):
         starting_capital=req.starting_capital or cfg.starting_capital,
         fee_rate=req.fee_rate if req.fee_rate is not None else cfg.fee_rate,
     )
+
+
+@app.get("/api/ai/status")
+def ai_status():
+    return {"running": _is_ai_running()}
+
+
+@app.post("/api/ai/start")
+def ai_start():
+    _start_ai_bot()
+    return {"ok": True, "running": _is_ai_running()}
+
+
+@app.post("/api/ai/stop")
+def ai_stop():
+    _stop_ai_bot()
+    return {"ok": True, "running": _is_ai_running()}
+
+
+@app.get("/api/ai/config")
+def ai_config_get():
+    return {"text": _load_ai_config_text()}
+
+
+@app.post("/api/ai/config")
+def ai_config_save(payload: Dict = Body(...)):
+    raw = str(payload.get("text", ""))
+    _save_ai_config_text(raw)
+    return {"ok": True}
+
+
+@app.post("/api/legacy/backtester/run")
+def run_legacy_backtester(payload: Dict = Body(...)):
+    values = dict(LEGACY_BT_DEFAULTS)
+    for k in LEGACY_BT_DEFAULTS.keys():
+        if k in payload and payload[k] is not None:
+            values[k] = str(payload[k])
+
+    errors = legacy_validate_values(values)
+    if errors:
+        return {"ok": False, "errors": errors}
+
+    cmd = legacy_build_command(values)
+    proc = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True)
+    output = (proc.stdout or "").strip() or (proc.stderr or "").strip()
+    plots = list_plot_files()
+    return {
+        "ok": proc.returncode == 0,
+        "returncode": proc.returncode,
+        "output": output,
+        "plots": plots,
+    }
 
 
 @app.get("/api/health")
