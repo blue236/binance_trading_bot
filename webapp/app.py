@@ -101,6 +101,8 @@ def _save_ai_config_text(raw: str) -> None:
 def _clean_console_output(text: str) -> str:
     # Remove ANSI escape sequences and normalize carriage-return updates.
     text = re.sub(r"\x1B\[[0-?]*[ -/]*[@-~]", "", text or "")
+    # Some scripts print literal backslash-n; convert for readability.
+    text = text.replace("\\r\\n", "\n").replace("\\n", "\n")
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     lines = [ln.rstrip() for ln in text.split("\n")]
     return "\n".join(lines).strip()
