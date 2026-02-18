@@ -59,8 +59,18 @@
 
       <hr>
       <h3>Legacy AI bot config.yaml editor (main.py)</h3>
+      <p class="muted">Sensitive keys are masked in this editor and stored separately in <code>.credentials.json</code>.</p>
       <textarea id="aiCfgRaw">{{ ai_config_text }}</textarea>
       <div class="row"><button id="aiCfgReload">Reload config.yaml</button><button id="aiCfgSave">Save config.yaml</button></div>
+
+      <hr>
+      <h3>Secrets manager (.credentials.json)</h3>
+      <div class="row"><label>API key</label><input id="secApiKey" type="password" placeholder="leave blank to keep current"></div>
+      <div class="row"><label>API secret</label><input id="secApiSecret" type="password" placeholder="leave blank to keep current"></div>
+      <div class="row"><label>Telegram bot token</label><input id="secTgToken" type="password" placeholder="leave blank to keep current"></div>
+      <div class="row"><label>Telegram chat id</label><input id="secTgChat" placeholder="leave blank to keep current"></div>
+      <div class="row"><button id="secSave">Save secrets</button><span id="secStatus" class="muted"></span></div>
+      <pre id="secMasked">{{ secrets_status | tojson(indent=2) }}</pre>
     </div>
   </section>
 
@@ -161,7 +171,23 @@
   async function saveAiCfg(){
     const text=document.getElementById('aiCfgRaw').value;
     await fetch('/api/ai/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text})});
-    alert('config.yaml saved for main.py');
+    alert('config.yaml saved for main.py (secrets stripped)');
+  }
+
+  async function saveSecrets(){
+    const status=document.getElementById('secStatus');
+    status.textContent='Saving...';
+    const payload={
+      api_key:document.getElementById('secApiKey').value,
+      api_secret:document.getElementById('secApiSecret').value,
+      telegram_bot_token:document.getElementById('secTgToken').value,
+      telegram_chat_id:document.getElementById('secTgChat').value,
+    };
+    const r=await fetch('/api/ai/secrets',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    const j=await r.json();
+    document.getElementById('secMasked').textContent=JSON.stringify(j.status||{},null,2);
+    ['secApiKey','secApiSecret','secTgToken','secTgChat'].forEach(id=>document.getElementById(id).value='');
+    status.textContent='Saved';
   }
 
   async function runBacktest(){
@@ -218,6 +244,7 @@
   document.getElementById('aiStop').onclick=aiStop;
   document.getElementById('aiCfgReload').onclick=reloadAiCfg;
   document.getElementById('aiCfgSave').onclick=saveAiCfg;
+  document.getElementById('secSave').onclick=saveSecrets;
 
   setupSymbols();
   loadChart('{{ default_symbol }}');

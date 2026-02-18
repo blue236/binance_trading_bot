@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 import re
 import signal
 import subprocess
@@ -30,6 +31,8 @@ ROOT = BASE.parent
 
 AI_CONFIG_PATH = ROOT / "config.yaml"
 AI_PID_FILE = ROOT / ".web_ai_bot.pid"
+CREDS_PATH = ROOT / ".credentials.json"
+MASK_TOKEN = "__MASKED__"
 
 config_mgr = ConfigManager(os.environ.get("BTB_WEB_CONFIG", "web_config.yaml"))
 storage = Storage(os.environ.get("BTB_WEB_DB", "webapp_state.sqlite"))
@@ -90,12 +93,69 @@ def _stop_ai_bot() -> None:
 def _load_ai_config_text() -> str:
     if not AI_CONFIG_PATH.exists():
         return ""
-    return AI_CONFIG_PATH.read_text()
+    raw = AI_CONFIG_PATH.read_text()
+    try:
+        data = yaml.safe_load(raw) or {}
+        data.setdefault("credentials", {})
+        for k in ("api_key", "api_secret"):
+            if data["credentials"].get(k):
+                data["credentials"][k] = MASK_TOKEN
+        data.setdefault("alerts", {})
+        for k in ("telegram_bot_token", "telegram_chat_id"):
+            if data["alerts"].get(k):
+                data["alerts"][k] = MASK_TOKEN
+        return yaml.safe_dump(data, sort_keys=False)
+    except Exception:
+        return raw
 
 
 def _save_ai_config_text(raw: str) -> None:
     data = yaml.safe_load(raw) or {}
+    # Prevent accidental secret persistence in config.yaml.
+    data.setdefault("credentials", {})
+    data["credentials"]["api_key"] = ""
+    data["credentials"]["api_secret"] = ""
+    data.setdefault("alerts", {})
+    data["alerts"]["telegram_bot_token"] = ""
+    data["alerts"]["telegram_chat_id"] = ""
     AI_CONFIG_PATH.write_text(yaml.safe_dump(data, sort_keys=False))
+
+
+def _mask(v: str) -> str:
+    if not v:
+        return ""
+    if len(v) <= 6:
+        return "*" * len(v)
+    return f"{v[:2]}***{v[-2:]}"
+
+
+def _load_secrets() -> dict:
+    if CREDS_PATH.exists():
+        try:
+            return json.loads(CREDS_PATH.read_text()) or {}
+        except Exception:
+            return {}
+    return {}
+
+
+def _save_secrets(values: dict) -> None:
+    existing = _load_secrets()
+    merged = dict(existing)
+    for k in ("api_key", "api_secret", "telegram_bot_token", "telegram_chat_id"):
+        v = (values.get(k) or "").strip()
+        if v:
+            merged[k] = v
+    CREDS_PATH.write_text(json.dumps(merged, indent=2, sort_keys=True))
+
+
+def _secrets_status() -> dict:
+    d = _load_secrets()
+    return {
+        "api_key": _mask(str(d.get("api_key", ""))),
+        "api_secret": _mask(str(d.get("api_secret", ""))),
+        "telegram_bot_token": _mask(str(d.get("telegram_bot_token", ""))),
+        "telegram_chat_id": _mask(str(d.get("telegram_chat_id", ""))),
+    }
 
 
 def _clean_console_output(text: str) -> str:
@@ -144,6 +204,7 @@ def index(request: Request):
             "last_refresh": storage.get_meta("last_chart_refresh") or "(never)",
             "ai_running": _is_ai_running(),
             "ai_config_text": _load_ai_config_text(),
+            "secrets_status": _secrets_status(),
         },
     )
 
@@ -226,6 +287,17 @@ def ai_config_save(payload: Dict = Body(...)):
     raw = str(payload.get("text", ""))
     _save_ai_config_text(raw)
     return {"ok": True}
+
+
+@app.get("/api/ai/secrets")
+def ai_secrets_get():
+    return {"ok": True, "status": _secrets_status()}
+
+
+@app.post("/api/ai/secrets")
+def ai_secrets_save(payload: Dict = Body(...)):
+    _save_secrets(payload or {})
+    return {"ok": True, "status": _secrets_status()}
 
 
 @app.post("/api/legacy/backtester/run")
