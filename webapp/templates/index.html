@@ -17,6 +17,7 @@
     input,select,textarea{padding:8px;border:1px solid #ddd;border-radius:8px}
     textarea{width:100%;min-height:320px;font-family:monospace}
     pre{background:#111;color:#ddd;padding:12px;border-radius:8px;overflow:auto;white-space:pre-wrap}
+    #aiLog,#legacyOut,#btOut{max-height:260px;overflow-y:auto;overflow-x:auto}
     .muted{color:#666}
     img.plot{max-width:280px;border:1px solid #ddd;border-radius:8px;margin:6px}
   </style>
@@ -142,7 +143,10 @@
   }
 
   function setAiLog(text){
-    document.getElementById('aiLog').textContent=text || '(no logs)';
+    const el=document.getElementById('aiLog');
+    const atBottom = (el.scrollTop + el.clientHeight) >= (el.scrollHeight - 8);
+    el.textContent=text || '(no logs)';
+    if(atBottom){ el.scrollTop = el.scrollHeight; }
   }
 
   async function refreshAiLogs(lines=10){
@@ -280,6 +284,11 @@
   loadChart('{{ default_symbol }}');
   updateAiStatus();
   refreshAiLogs(10);
+
+  // Auto refresh AI status/logs every 30s.
+  setInterval(() => {
+    updateAiStatus();
+  }, 30000);
 </script>
 </body>
 </html>
