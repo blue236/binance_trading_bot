@@ -312,6 +312,14 @@ def poll_telegram_commands(tg, offset, cfg, state, equity_now, base_ccy):
 
     return offset
 
+
+def responsive_wait(seconds, tg, offset, cfg, state, equity_now, base_ccy):
+    end_ts = time.time() + max(0, int(seconds))
+    while time.time() < end_ts:
+        offset = poll_telegram_commands(tg, offset, cfg, state, equity_now, base_ccy)
+        time.sleep(3)
+    return offset
+
 def fetch_ohlc(exchange, symbol, timeframe, limit=500):
     o = exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
     df = pd.DataFrame(o, columns=["ts","o","h","l","c","v"])
@@ -597,7 +605,7 @@ def main():
                 logger.warning("Daily loss stop reached. Equity %.2f vs start %.2f", equity_now, equity_start)
                 if tg:
                     send_telegram(tg, f"⛔ Daily loss stop reached. Equity {equity_now:.2f} vs start {equity_start:.2f}. Cooling 60m.")
-                time.sleep(60*60)
+                tg_offset = responsive_wait(60*60, tg, tg_offset, cfg, state, equity_now, base_ccy)
                 continue
 
             # entry checks
@@ -756,8 +764,9 @@ def main():
             # equity snapshot
             equity_now = fetch_equity_usdt(exchange, base_ccy, balances_total, tickers)
             log_csv(csv_dir, "equity", {"ts": loop_ts.isoformat(), "equity": equity_now}, fieldnames=EQUITY_FIELDS)
-            logger.info("Equity snapshot: %.4f and sleep %d seconds", equity_now, cfg["strategy"].get("loop_sleep_seconds", 60))
-            time.sleep(cfg["strategy"].get("loop_sleep_seconds", 60))
+            sleep_sec = int(cfg["strategy"].get("loop_sleep_seconds", 60) or 60)
+            logger.info("Equity snapshot: %.4f and sleep %d seconds", equity_now, sleep_sec)
+            tg_offset = responsive_wait(sleep_sec, tg, tg_offset, cfg, state, equity_now, base_ccy)
         except Exception as e:
             logger.exception("Loop error: %s", e)
             time.sleep(10)
