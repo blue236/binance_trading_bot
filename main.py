@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 import os, sys, time, json, math, traceback, logging
+import urllib.parse
+import urllib.request
 import pandas as pd
 import numpy as np
 import yaml
@@ -157,21 +159,30 @@ def safe_fetch_balance(exchange, retries=5):
     return exchange.fetch_balance()
 
 def connect_telegram(cfg):
-    if not cfg["alerts"]["enable_telegram"] or Bot is None:
+    alerts = cfg.get("alerts", {})
+    if not alerts.get("enable_telegram"):
         return None
-    try:
-        bot = Bot(token=cfg["alerts"]["telegram_bot_token"])
-        return (bot, cfg["alerts"]["telegram_chat_id"])
-    except Exception as e:
-        print("Telegram init failed:", e, file=sys.stderr)
+    token = (alerts.get("telegram_bot_token") or "").strip()
+    chat_id = str((alerts.get("telegram_chat_id") or "").strip())
+    if not token or not chat_id:
         return None
+    return {"token": token, "chat_id": chat_id}
+
+
+def _tg_post(token: str, method: str, params: dict):
+    url = f"https://api.telegram.org/bot{token}/{method}"
+    data = urllib.parse.urlencode(params).encode("utf-8")
+    req = urllib.request.Request(url, data=data)
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        raw = resp.read().decode("utf-8", errors="ignore")
+    return json.loads(raw)
+
 
 def send_telegram(tg, text):
     if tg is None:
         return
-    bot, chat_id = tg
     try:
-        bot.send_message(chat_id=chat_id, text=text[:4000])
+        _tg_post(tg["token"], "sendMessage", {"chat_id": tg["chat_id"], "text": (text or "")[:4000]})
     except Exception as e:
         print("Telegram send failed:", e, file=sys.stderr)
 
@@ -179,12 +190,12 @@ def send_telegram(tg, text):
 def init_telegram_offset(tg):
     if tg is None:
         return None
-    bot, _chat_id = tg
     try:
-        updates = bot.get_updates(timeout=0)
+        data = _tg_post(tg["token"], "getUpdates", {"timeout": 0})
+        updates = data.get("result", []) if isinstance(data, dict) else []
         if not updates:
             return None
-        return updates[-1].update_id + 1
+        return int(updates[-1].get("update_id", 0)) + 1
     except Exception:
         return None
 
@@ -199,7 +210,7 @@ def request_trade_approval(tg, action, symbol, qty, price, timeout_sec, offset=N
     if tg is None:
         return False, offset
 
-    bot, chat_id = tg
+    chat_id = tg["chat_id"]
     token = str(int(time.time()))[-6:]
     prompt = (
         f"🟡 APPROVAL REQUIRED\n"
@@ -214,7 +225,7 @@ def request_trade_approval(tg, action, symbol, qty, price, timeout_sec, offset=N
         f"Timeout: {timeout_sec}s"
     )
     try:
-        bot.send_message(chat_id=chat_id, text=prompt[:4000])
+        _tg_post(tg["token"], "sendMessage", {"chat_id": chat_id, "text": prompt[:4000]})
     except Exception:
         return False, offset
 
@@ -222,38 +233,32 @@ def request_trade_approval(tg, action, symbol, qty, price, timeout_sec, offset=N
     chat_id_str = str(chat_id)
     while time.time() < deadline:
         try:
-            updates = bot.get_updates(offset=offset, timeout=10)
+            params = {"timeout": 10}
+            if offset is not None:
+                params["offset"] = int(offset)
+            data = _tg_post(tg["token"], "getUpdates", params)
+            updates = data.get("result", []) if isinstance(data, dict) else []
         except Exception:
             time.sleep(1)
             continue
 
         for upd in updates:
-            offset = upd.update_id + 1
-            msg = getattr(upd, "message", None)
-            if not msg:
+            offset = int(upd.get("update_id", 0)) + 1
+            msg = upd.get("message") or {}
+            c = str((msg.get("chat") or {}).get("id", ""))
+            if c != chat_id_str:
                 continue
-            if str(getattr(msg, "chat_id", "")) != chat_id_str:
-                continue
-            txt = (msg.text or "").strip().lower()
+            txt = str(msg.get("text") or "").strip().lower()
             approve_cmd = f"approve {token}".lower()
             deny_cmd = f"deny {token}".lower()
             if txt == approve_cmd or txt == f"/approve {token}".lower():
-                try:
-                    bot.send_message(chat_id=chat_id, text=f"✅ Approved: {action} {symbol}")
-                except Exception:
-                    pass
+                send_telegram(tg, f"✅ Approved: {action} {symbol}")
                 return True, offset
             if txt == deny_cmd or txt == f"/deny {token}".lower():
-                try:
-                    bot.send_message(chat_id=chat_id, text=f"❌ Denied: {action} {symbol}")
-                except Exception:
-                    pass
+                send_telegram(tg, f"❌ Denied: {action} {symbol}")
                 return False, offset
 
-    try:
-        bot.send_message(chat_id=chat_id, text=f"⌛ Approval timeout: {action} {symbol}")
-    except Exception:
-        pass
+    send_telegram(tg, f"⌛ Approval timeout: {action} {symbol}")
     return False, offset
 
 def fetch_ohlc(exchange, symbol, timeframe, limit=500):
@@ -461,9 +466,7 @@ def finalize_exit(cfg, state, state_path, csv_dir, tg, sym, reason, price, qty):
         del state["positions"][sym]
     write_state(state_path, state)
     if tg: 
-        bot, chat = tg
-        try: bot.send_message(chat_id=chat, text=f"🔴 EXIT {sym} reason={reason} qty={qty} @ {price:.4f}")
-        except: pass
+        send_telegram(tg, f"🔴 EXIT {sym} reason={reason} qty={qty} @ {price:.4f}")
 
 def main():
     cfg = apply_env_overrides(load_config())
@@ -498,8 +501,7 @@ def main():
     logger.info("Bot started. dry_run=%s", cfg["general"]["dry_run"])
     if tg:
         logger.info("Telegram alerts enabled.")
-        try: tg[0].send_message(chat_id=tg[1], text=f"🚀 Bot started. Equity start: {equity_start:.2f} {cfg['general']['base_currency']} (dry_run={cfg['general']['dry_run']})")
-        except: pass
+        send_telegram(tg, f"🚀 Bot started. Equity start: {equity_start:.2f} {cfg['general']['base_currency']} (dry_run={cfg['general']['dry_run']})")
     else:
         logger.info("Telegram alerts not enabled or failed to connect.")
 
@@ -519,8 +521,7 @@ def main():
                 equity_start = fetch_equity_usdt(exchange, cfg["general"]["base_currency"])
                 logger.info("New session %s. Equity start %.2f %s", session_date, equity_start, base_ccy)
                 if tg:
-                    try: tg[0].send_message(chat_id=tg[1], text=f"📅 New session {session_date}. Equity start: {equity_start:.2f}")
-                    except: pass
+                    send_telegram(tg, f"📅 New session {session_date}. Equity start: {equity_start:.2f}")
 
             symbols = cfg["general"]["symbols"]
             pos_syms = list(state["positions"].keys())
@@ -543,8 +544,7 @@ def main():
             if daily_pnl_guard(cfg, equity_now, equity_start):
                 logger.warning("Daily loss stop reached. Equity %.2f vs start %.2f", equity_now, equity_start)
                 if tg:
-                    try: tg[0].send_message(chat_id=tg[1], text=f"⛔ Daily loss stop reached. Equity {equity_now:.2f} vs start {equity_start:.2f}. Cooling 60m.")
-                    except: pass
+                    send_telegram(tg, f"⛔ Daily loss stop reached. Equity {equity_now:.2f} vs start {equity_start:.2f}. Cooling 60m.")
                 time.sleep(60*60)
                 continue
 
@@ -626,8 +626,7 @@ def main():
                     }, fieldnames=TRADE_FIELDS)
                     logger.debug("ENTER %s %s qty=%s price=%.4f sl=%.4f regime=%s", symbol, signal, qty, price, sl, regime)
                     if tg:
-                        try: tg[0].send_message(chat_id=tg[1], text=f"🟢 ENTER {symbol} {signal} qty={qty} @ {price:.4f} SL={sl:.4f} regime={regime}")
-                        except: pass
+                        send_telegram(tg, f"🟢 ENTER {symbol} {signal} qty={qty} @ {price:.4f} SL={sl:.4f} regime={regime}")
                 else:
                     logger.debug("Skip %s: qty=%.6f or constraints not met", symbol, qty)
 

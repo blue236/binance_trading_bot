@@ -5,6 +5,9 @@ import re
 import signal
 import subprocess
 import sys
+import json
+import urllib.parse
+import urllib.request
 from pathlib import Path
 from typing import Dict
 
@@ -152,6 +155,22 @@ def _secrets_status() -> dict:
     }
 
 
+def _notify_telegram(text: str) -> None:
+    try:
+        d = _load_secrets()
+        token = str(d.get("telegram_bot_token", "") or "").strip()
+        chat_id = str(d.get("telegram_chat_id", "") or "").strip()
+        if not token or not chat_id:
+            return
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        payload = urllib.parse.urlencode({"chat_id": chat_id, "text": text[:4000]}).encode("utf-8")
+        req = urllib.request.Request(url, data=payload)
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            _ = json.loads(resp.read().decode("utf-8", errors="ignore"))
+    except Exception:
+        return
+
+
 def _ai_log_path() -> Path:
     if AI_CONFIG_PATH.exists():
         try:
@@ -284,12 +303,15 @@ def ai_status():
 @app.post("/api/ai/start")
 def ai_start():
     _start_ai_bot()
+    if _is_ai_running():
+        _notify_telegram("🟢 AI bot started from Web UI")
     return {"ok": True, "running": _is_ai_running(), "log_tail": _tail_text(_ai_log_path(), 10)}
 
 
 @app.post("/api/ai/stop")
 def ai_stop():
     _stop_ai_bot()
+    _notify_telegram("🛑 AI bot stopped from Web UI")
     return {"ok": True, "running": _is_ai_running(), "log_tail": _tail_text(_ai_log_path(), 10)}
 
 
