@@ -175,6 +175,87 @@ def send_telegram(tg, text):
     except Exception as e:
         print("Telegram send failed:", e, file=sys.stderr)
 
+
+def init_telegram_offset(tg):
+    if tg is None:
+        return None
+    bot, _chat_id = tg
+    try:
+        updates = bot.get_updates(timeout=0)
+        if not updates:
+            return None
+        return updates[-1].update_id + 1
+    except Exception:
+        return None
+
+
+def request_trade_approval(tg, action, symbol, qty, price, timeout_sec, offset=None):
+    """Request manual approval via Telegram.
+
+    User should reply in chat with one of:
+    - APPROVE <token>
+    - DENY <token>
+    """
+    if tg is None:
+        return False, offset
+
+    bot, chat_id = tg
+    token = str(int(time.time()))[-6:]
+    prompt = (
+        f"🟡 APPROVAL REQUIRED\n"
+        f"Action: {action}\n"
+        f"Symbol: {symbol}\n"
+        f"Qty: {qty}\n"
+        f"Price: {price:.6f}\n\n"
+        f"Reply with:\n"
+        f"APPROVE {token}\n"
+        f"or\n"
+        f"DENY {token}\n"
+        f"Timeout: {timeout_sec}s"
+    )
+    try:
+        bot.send_message(chat_id=chat_id, text=prompt[:4000])
+    except Exception:
+        return False, offset
+
+    deadline = time.time() + max(5, int(timeout_sec))
+    chat_id_str = str(chat_id)
+    while time.time() < deadline:
+        try:
+            updates = bot.get_updates(offset=offset, timeout=10)
+        except Exception:
+            time.sleep(1)
+            continue
+
+        for upd in updates:
+            offset = upd.update_id + 1
+            msg = getattr(upd, "message", None)
+            if not msg:
+                continue
+            if str(getattr(msg, "chat_id", "")) != chat_id_str:
+                continue
+            txt = (msg.text or "").strip().lower()
+            approve_cmd = f"approve {token}".lower()
+            deny_cmd = f"deny {token}".lower()
+            if txt == approve_cmd or txt == f"/approve {token}".lower():
+                try:
+                    bot.send_message(chat_id=chat_id, text=f"✅ Approved: {action} {symbol}")
+                except Exception:
+                    pass
+                return True, offset
+            if txt == deny_cmd or txt == f"/deny {token}".lower():
+                try:
+                    bot.send_message(chat_id=chat_id, text=f"❌ Denied: {action} {symbol}")
+                except Exception:
+                    pass
+                return False, offset
+
+    try:
+        bot.send_message(chat_id=chat_id, text=f"⌛ Approval timeout: {action} {symbol}")
+    except Exception:
+        pass
+    return False, offset
+
 def fetch_ohlc(exchange, symbol, timeframe, limit=500):
     o = exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
     df = pd.DataFrame(o, columns=["ts","o","h","l","c","v"])
@@ -395,6 +476,10 @@ def main():
     logger = setup_logger(cfg["logging"]["csv_dir"], level=cfg.get("logging", {}).get("level", "INFO"))
     exchange = connect_exchange(cfg)
     tg = connect_telegram(cfg)
+    tg_offset = init_telegram_offset(tg)
+
+    approval_enabled = bool(cfg.get("alerts", {}).get("enable_trade_approval", False))
+    approval_timeout_sec = int(cfg.get("alerts", {}).get("approval_timeout_sec", 120) or 120)
 
     state = read_state(state_path)
     logger.debug(
@@ -417,6 +502,9 @@ def main():
         except: pass
     else:
         logger.info("Telegram alerts not enabled or failed to connect.")
+
+    if approval_enabled:
+        logger.info("Trade approval via Telegram is ENABLED (timeout=%ss)", approval_timeout_sec)
 
     while True:
         loop_ts = now_tz(tzname)
@@ -503,6 +591,24 @@ def main():
                     qty,
                 )
                 if qty > 0 and order_constraints_ok(exchange, symbol, qty, price, cfg["general"]["min_notional_usdc"]):
+                    if approval_enabled:
+                        approved, tg_offset = request_trade_approval(
+                            tg,
+                            action="BUY",
+                            symbol=symbol,
+                            qty=qty,
+                            price=price,
+                            timeout_sec=approval_timeout_sec,
+                            offset=tg_offset,
+                        )
+                        if not approved:
+                            logger.info("Entry skipped (approval not granted): %s qty=%s", symbol, qty)
+                            log_csv(csv_dir, "trades", {
+                                "ts": loop_ts.isoformat(), "event": "APPROVAL_DENIED", "symbol": symbol, "side": "BUY",
+                                "price": price, "qty": qty, "signal": signal, "regime": regime, "reason": "telegram_approval"
+                            }, fieldnames=TRADE_FIELDS)
+                            set_cooldown(state, symbol, loop_ts)
+                            continue
                     place_order(exchange, symbol, "buy", qty, price=price, dry_run=cfg["general"]["dry_run"])
                     free_base = max(0.0, free_base - (qty * price))
                     set_cooldown(state, symbol, loop_ts)
@@ -549,6 +655,14 @@ def main():
                 if pos["signal"] == "R_LONG":
                     et = datetime.fromisoformat(pos["entry_time"])
                     if loop_ts - et >= timedelta(hours=cfg["strategy"]["mean_reversion_time_stop_hours"]):
+                        if approval_enabled:
+                            approved, tg_offset = request_trade_approval(
+                                tg, action="SELL", symbol=sym, qty=qty, price=last,
+                                timeout_sec=approval_timeout_sec, offset=tg_offset,
+                            )
+                            if not approved:
+                                logger.info("Exit skipped (approval not granted): %s qty=%s", sym, qty)
+                                continue
                         place_order(exchange, sym, "sell", qty, price=last, dry_run=cfg["general"]["dry_run"])
                         logger.info("EXIT %s reason=TIME_STOP qty=%s price=%.4f", sym, qty, last)
                         finalize_exit(cfg, state, state_path, csv_dir, tg, sym, "TIME_STOP", last, qty)
@@ -556,6 +670,14 @@ def main():
                     if "tp_mid" in pos and last >= pos["tp_mid"]:
                         sell_qty = clamp_qty(exchange, sym, qty * 0.5)
                         if order_constraints_ok(exchange, sym, sell_qty, last, cfg["general"]["min_notional_usdc"]):
+                            if approval_enabled:
+                                approved, tg_offset = request_trade_approval(
+                                    tg, action="SELL", symbol=sym, qty=sell_qty, price=last,
+                                    timeout_sec=approval_timeout_sec, offset=tg_offset,
+                                )
+                                if not approved:
+                                    logger.info("Partial TP skipped (approval not granted): %s qty=%s", sym, sell_qty)
+                                    continue
                             place_order(exchange, sym, "sell", sell_qty, price=last, dry_run=cfg["general"]["dry_run"])
                             pos["qty"] = float(qty - sell_qty); del pos["tp_mid"]; changed = True
                             logger.info("PARTIAL_TP %s qty=%s price=%.4f note=mid-band", sym, sell_qty, last)
@@ -563,6 +685,14 @@ def main():
 
                 # stop-loss
                 if last <= sl:
+                    if approval_enabled:
+                        approved, tg_offset = request_trade_approval(
+                            tg, action="SELL", symbol=sym, qty=pos["qty"], price=last,
+                            timeout_sec=approval_timeout_sec, offset=tg_offset,
+                        )
+                        if not approved:
+                            logger.info("Stop exit skipped (approval not granted): %s qty=%s", sym, pos["qty"])
+                            continue
                     place_order(exchange, sym, "sell", pos["qty"], price=last, dry_run=cfg["general"]["dry_run"])
                     logger.info("EXIT %s reason=STOP qty=%s price=%.4f", sym, pos["qty"], last)
                     finalize_exit(cfg, state, state_path, csv_dir, tg, sym, "STOP", last, pos["qty"])

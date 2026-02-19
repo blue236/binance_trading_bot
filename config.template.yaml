@@ -33,6 +33,8 @@ alerts:
   enable_telegram: false
   telegram_bot_token: ""
   telegram_chat_id: ""
+  enable_trade_approval: false
+  approval_timeout_sec: 120
 logging:
   csv_dir: ./logs
   state_file: ./state.json
