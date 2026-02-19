@@ -11,7 +11,7 @@ from typing import Dict
 import yaml
 from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI, Body, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -296,6 +296,14 @@ def ai_stop():
 @app.get("/api/ai/logs")
 def ai_logs(lines: int = 10):
     return {"ok": True, "lines": lines, "tail": _tail_text(_ai_log_path(), lines)}
+
+
+@app.get("/api/ai/logs/download")
+def ai_logs_download():
+    path = _ai_log_path()
+    if not path.exists():
+        return {"ok": False, "error": "log file not found"}
+    return FileResponse(path=str(path), media_type="text/plain", filename="ai_bot.log")
 
 
 @app.get("/api/ai/config")

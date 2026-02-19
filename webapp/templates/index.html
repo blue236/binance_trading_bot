@@ -36,6 +36,7 @@
       <button id="aiStart">Start Bot</button>
       <button id="aiStop">Stop Bot</button>
       <button id="aiLogRefresh">Refresh Logs</button>
+      <button id="aiLogDownload">Download Log</button>
       <label>Lines</label>
       <select id="aiLogLines">
         <option value="50">50</option>
@@ -294,6 +295,7 @@
   document.getElementById('aiStart').onclick=aiStart;
   document.getElementById('aiStop').onclick=aiStop;
   document.getElementById('aiLogRefresh').onclick=()=>refreshAiLogs();
+  document.getElementById('aiLogDownload').onclick=()=>{ window.location.href='/api/ai/logs/download'; };
   document.getElementById('aiLogLines').onchange=()=>refreshAiLogs();
   document.getElementById('aiCfgReload').onclick=reloadAiCfg;
   document.getElementById('aiCfgSave').onclick=saveAiCfg;
