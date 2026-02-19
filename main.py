@@ -261,6 +261,57 @@ def request_trade_approval(tg, action, symbol, qty, price, timeout_sec, offset=N
     send_telegram(tg, f"⌛ Approval timeout: {action} {symbol}")
     return False, offset
 
+
+def _status_text(cfg, state, equity_now, base_ccy):
+    positions = state.get("positions", {}) if isinstance(state, dict) else {}
+    syms = cfg.get("general", {}).get("symbols", [])
+    return (
+        "📊 Current status\n"
+        f"dry_run: {cfg.get('general', {}).get('dry_run')}\n"
+        f"equity: {float(equity_now):.2f} {base_ccy}\n"
+        f"open_positions: {len(positions)}\n"
+        f"symbols: {', '.join(syms)}"
+    )
+
+
+def poll_telegram_commands(tg, offset, cfg, state, equity_now, base_ccy):
+    if tg is None:
+        return offset
+    try:
+        params = {"timeout": 0}
+        if offset is not None:
+            params["offset"] = int(offset)
+        data = _tg_post(tg["token"], "getUpdates", params)
+        updates = data.get("result", []) if isinstance(data, dict) else []
+    except Exception:
+        return offset
+
+    chat_id_str = str(tg["chat_id"])
+    for upd in updates:
+        offset = int(upd.get("update_id", 0)) + 1
+        msg = upd.get("message") or {}
+        c = str((msg.get("chat") or {}).get("id", ""))
+        if c != chat_id_str:
+            continue
+        txt = str(msg.get("text") or "").strip()
+        cmd = txt.lower()
+
+        if cmd in ("/status", "status"):
+            send_telegram(tg, _status_text(cfg, state, equity_now, base_ccy))
+        elif cmd in ("/positions", "positions"):
+            positions = state.get("positions", {}) if isinstance(state, dict) else {}
+            if not positions:
+                send_telegram(tg, "No open positions.")
+            else:
+                lines = ["📌 Open positions"]
+                for sym, pos in positions.items():
+                    lines.append(f"- {sym}: qty={pos.get('qty')} entry={float(pos.get('entry_price', 0.0)):.4f} sl={float(pos.get('sl', 0.0)):.4f}")
+                send_telegram(tg, "\n".join(lines)[:3900])
+        elif cmd in ("/help", "help"):
+            send_telegram(tg, "Available commands: /status, /positions, /help")
+
+    return offset
+
 def fetch_ohlc(exchange, symbol, timeframe, limit=500):
     o = exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
     df = pd.DataFrame(o, columns=["ts","o","h","l","c","v"])
@@ -531,6 +582,7 @@ def main():
             balances_total = balances.get("total", {})
             balances_free = balances.get("free", {})
             equity_now = fetch_equity_usdt(exchange, base_ccy, balances_total, tickers)
+            tg_offset = poll_telegram_commands(tg, tg_offset, cfg, state, equity_now, base_ccy)
             #logger.debug("Tickers: %s. Equity now: %.2f %s", tickers, equity_now, base_ccy)
             logger.debug(
                 "Balances: free_%s=%.6f total_assets=%d tickers=%d",
