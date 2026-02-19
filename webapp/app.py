@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import json
 import re
 import signal
 import subprocess
@@ -21,6 +20,7 @@ from .config_manager import ConfigManager
 from .storage import Storage
 from .chart_service import ChartService
 from .backtest_service import BacktestService
+from credentials import load_credentials, save_credentials
 
 # Reuse legacy backtester web helpers to stay compatible with existing CLI options.
 from web_backtester_ui import DEFAULTS as LEGACY_BT_DEFAULTS, build_command as legacy_build_command, validate_values as legacy_validate_values, list_plot_files
@@ -31,7 +31,6 @@ ROOT = BASE.parent
 
 AI_CONFIG_PATH = ROOT / "config.yaml"
 AI_PID_FILE = ROOT / ".web_ai_bot.pid"
-CREDS_PATH = ROOT / ".credentials.json"
 MASK_TOKEN = "__MASKED__"
 
 config_mgr = ConfigManager(os.environ.get("BTB_WEB_CONFIG", "web_config.yaml"))
@@ -130,12 +129,7 @@ def _mask(v: str) -> str:
 
 
 def _load_secrets() -> dict:
-    if CREDS_PATH.exists():
-        try:
-            return json.loads(CREDS_PATH.read_text()) or {}
-        except Exception:
-            return {}
-    return {}
+    return load_credentials()
 
 
 def _save_secrets(values: dict) -> None:
@@ -145,7 +139,7 @@ def _save_secrets(values: dict) -> None:
         v = (values.get(k) or "").strip()
         if v:
             merged[k] = v
-    CREDS_PATH.write_text(json.dumps(merged, indent=2, sort_keys=True))
+    save_credentials(merged)
 
 
 def _secrets_status() -> dict:
@@ -323,7 +317,10 @@ def ai_secrets_get():
 
 @app.post("/api/ai/secrets")
 def ai_secrets_save(payload: Dict = Body(...)):
-    _save_secrets(payload or {})
+    try:
+        _save_secrets(payload or {})
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
     return {"ok": True, "status": _secrets_status()}
 
 

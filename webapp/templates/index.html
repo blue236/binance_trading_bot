@@ -72,7 +72,8 @@
       <div class="row"><button id="aiCfgReload">Reload config.yaml</button><button id="aiCfgSave">Save config.yaml</button></div>
 
       <hr>
-      <h3>Secrets manager (.credentials.json)</h3>
+      <h3>Secrets manager (.credentials.enc.json)</h3>
+      <p class="muted">Set environment variable <code>BTB_CREDENTIALS_PASSPHRASE</code> before saving secrets.</p>
       <div class="row"><label>API key</label><input id="secApiKey" type="password" placeholder="leave blank to keep current"></div>
       <div class="row"><label>API secret</label><input id="secApiSecret" type="password" placeholder="leave blank to keep current"></div>
       <div class="row"><label>Telegram bot token</label><input id="secTgToken" type="password" placeholder="leave blank to keep current"></div>
@@ -218,6 +219,10 @@
     };
     const r=await fetch('/api/ai/secrets',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
     const j=await r.json();
+    if(!j.ok){
+      status.textContent='Failed: ' + (j.error || 'unknown error');
+      return;
+    }
     document.getElementById('secMasked').textContent=JSON.stringify(j.status||{},null,2);
     ['secApiKey','secApiSecret','secTgToken','secTgChat'].forEach(id=>document.getElementById(id).value='');
     status.textContent='Saved';

@@ -57,3 +57,20 @@ Core fields:
 - `POST /api/charts/refresh`
 - `POST /api/backtester/run`
 - `GET /api/health`
+
+## Credential security
+
+Secrets are no longer stored in plaintext config files.
+
+- `config.yaml` editor masks and strips secret fields on save.
+- Web secrets manager stores encrypted credentials in `.credentials.enc.json`.
+- Set `BTB_CREDENTIALS_PASSPHRASE` before saving secrets.
+
+Example:
+
+```bash
+export BTB_CREDENTIALS_PASSPHRASE='use-a-long-random-passphrase'
+./run_web_ui.sh
+```
+
+Environment variables (`BINANCE_API_KEY`, `BINANCE_API_SECRET`, etc.) still override stored values.
