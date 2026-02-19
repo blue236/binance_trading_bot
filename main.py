@@ -265,8 +265,10 @@ def request_trade_approval(tg, action, symbol, qty, price, timeout_sec, offset=N
 def _status_text(cfg, state, equity_now, base_ccy):
     positions = state.get("positions", {}) if isinstance(state, dict) else {}
     syms = cfg.get("general", {}).get("symbols", [])
+    paused = bool(state.get("bot_paused", False)) if isinstance(state, dict) else False
     return (
         "📊 Current status\n"
+        f"mode: {'PAUSED' if paused else 'RUNNING'}\n"
         f"dry_run: {cfg.get('general', {}).get('dry_run')}\n"
         f"equity: {float(equity_now):.2f} {base_ccy}\n"
         f"open_positions: {len(positions)}\n"
@@ -274,7 +276,18 @@ def _status_text(cfg, state, equity_now, base_ccy):
     )
 
 
-def poll_telegram_commands(tg, offset, cfg, state, equity_now, base_ccy):
+def _risk_text(cfg):
+    r = cfg.get("risk", {})
+    return (
+        "🛡 Risk config\n"
+        f"per_trade_risk_pct: {r.get('per_trade_risk_pct')}\n"
+        f"daily_loss_stop_pct: {r.get('daily_loss_stop_pct')}\n"
+        f"max_concurrent_positions: {r.get('max_concurrent_positions')}\n"
+        f"cooldown_hours: {r.get('cooldown_hours')}"
+    )
+
+
+def poll_telegram_commands(tg, offset, cfg, state, equity_now, base_ccy, state_path):
     if tg is None:
         return offset
     try:
@@ -307,16 +320,28 @@ def poll_telegram_commands(tg, offset, cfg, state, equity_now, base_ccy):
                 for sym, pos in positions.items():
                     lines.append(f"- {sym}: qty={pos.get('qty')} entry={float(pos.get('entry_price', 0.0)):.4f} sl={float(pos.get('sl', 0.0)):.4f}")
                 send_telegram(tg, "\n".join(lines)[:3900])
+        elif cmd in ("/risk", "risk"):
+            send_telegram(tg, _risk_text(cfg))
+        elif cmd in ("/pause", "pause"):
+            if not state.get("bot_paused", False):
+                state["bot_paused"] = True
+                write_state(state_path, state)
+            send_telegram(tg, "⏸ Bot is now PAUSED. Monitoring and Telegram commands stay active.")
+        elif cmd in ("/resume", "resume"):
+            if state.get("bot_paused", False):
+                state["bot_paused"] = False
+                write_state(state_path, state)
+            send_telegram(tg, "▶️ Bot resumed.")
         elif cmd in ("/help", "help"):
-            send_telegram(tg, "Available commands: /status, /positions, /help")
+            send_telegram(tg, "Available commands: /status, /positions, /risk, /pause, /resume, /help")
 
     return offset
 
 
-def responsive_wait(seconds, tg, offset, cfg, state, equity_now, base_ccy):
+def responsive_wait(seconds, tg, offset, cfg, state, equity_now, base_ccy, state_path):
     end_ts = time.time() + max(0, int(seconds))
     while time.time() < end_ts:
-        offset = poll_telegram_commands(tg, offset, cfg, state, equity_now, base_ccy)
+        offset = poll_telegram_commands(tg, offset, cfg, state, equity_now, base_ccy, state_path)
         time.sleep(3)
     return offset
 
@@ -544,6 +569,8 @@ def main():
     approval_timeout_sec = int(cfg.get("alerts", {}).get("approval_timeout_sec", 120) or 120)
 
     state = read_state(state_path)
+    if "bot_paused" not in state:
+        state["bot_paused"] = False
     logger.debug(
         "Config: dry_run=%s symbols=%s timeframe_signal=%s timeframe_regime=%s base_currency=%s",
         cfg["general"]["dry_run"],
@@ -590,7 +617,7 @@ def main():
             balances_total = balances.get("total", {})
             balances_free = balances.get("free", {})
             equity_now = fetch_equity_usdt(exchange, base_ccy, balances_total, tickers)
-            tg_offset = poll_telegram_commands(tg, tg_offset, cfg, state, equity_now, base_ccy)
+            tg_offset = poll_telegram_commands(tg, tg_offset, cfg, state, equity_now, base_ccy, state_path)
             #logger.debug("Tickers: %s. Equity now: %.2f %s", tickers, equity_now, base_ccy)
             logger.debug(
                 "Balances: free_%s=%.6f total_assets=%d tickers=%d",
@@ -605,7 +632,13 @@ def main():
                 logger.warning("Daily loss stop reached. Equity %.2f vs start %.2f", equity_now, equity_start)
                 if tg:
                     send_telegram(tg, f"⛔ Daily loss stop reached. Equity {equity_now:.2f} vs start {equity_start:.2f}. Cooling 60m.")
-                tg_offset = responsive_wait(60*60, tg, tg_offset, cfg, state, equity_now, base_ccy)
+                tg_offset = responsive_wait(60*60, tg, tg_offset, cfg, state, equity_now, base_ccy, state_path)
+                continue
+
+            if state.get("bot_paused", False):
+                logger.info("Bot paused by Telegram command; skipping trade decisions this cycle.")
+                sleep_sec = int(cfg["strategy"].get("loop_sleep_seconds", 60) or 60)
+                tg_offset = responsive_wait(sleep_sec, tg, tg_offset, cfg, state, equity_now, base_ccy, state_path)
                 continue
 
             # entry checks
@@ -766,7 +799,7 @@ def main():
             log_csv(csv_dir, "equity", {"ts": loop_ts.isoformat(), "equity": equity_now}, fieldnames=EQUITY_FIELDS)
             sleep_sec = int(cfg["strategy"].get("loop_sleep_seconds", 60) or 60)
             logger.info("Equity snapshot: %.4f and sleep %d seconds", equity_now, sleep_sec)
-            tg_offset = responsive_wait(sleep_sec, tg, tg_offset, cfg, state, equity_now, base_ccy)
+            tg_offset = responsive_wait(sleep_sec, tg, tg_offset, cfg, state, equity_now, base_ccy, state_path)
         except Exception as e:
             logger.exception("Loop error: %s", e)
             time.sleep(10)
