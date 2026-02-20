@@ -287,6 +287,15 @@ def _risk_text(cfg):
     )
 
 
+def _build_confirm_text(pending):
+    if not pending:
+        return "No pending change."
+    return (
+        f"Pending change: {pending.get('cmd')} -> {pending.get('value')}\n"
+        "Reply /confirm to apply or /cancel to discard."
+    )
+
+
 def poll_telegram_commands(tg, offset, cfg, state, equity_now, base_ccy, state_path):
     if tg is None:
         return offset
@@ -308,6 +317,8 @@ def poll_telegram_commands(tg, offset, cfg, state, equity_now, base_ccy, state_p
             continue
         txt = str(msg.get("text") or "").strip()
         cmd = txt.lower()
+        parts = txt.split()
+        root = (parts[0].lower() if parts else "")
 
         if cmd in ("/status", "status"):
             send_telegram(tg, _status_text(cfg, state, equity_now, base_ccy))
@@ -322,6 +333,57 @@ def poll_telegram_commands(tg, offset, cfg, state, equity_now, base_ccy, state_p
                 send_telegram(tg, "\n".join(lines)[:3900])
         elif cmd in ("/risk", "risk"):
             send_telegram(tg, _risk_text(cfg))
+        elif root in ("/setrisk", "setrisk"):
+            if len(parts) < 2:
+                send_telegram(tg, "Usage: /setrisk <percent> (e.g. /setrisk 0.4)")
+                continue
+            try:
+                v = float(parts[1])
+                if v < 0.05 or v > 5.0:
+                    raise ValueError("range")
+            except Exception:
+                send_telegram(tg, "Invalid risk. Allowed range: 0.05 ~ 5.0")
+                continue
+            state["pending_change"] = {"cmd": "setrisk", "value": v, "requested_at": now_tz(cfg["logging"]["tz"]).isoformat()}
+            write_state(state_path, state)
+            send_telegram(tg, _build_confirm_text(state["pending_change"]))
+        elif root in ("/setmaxpos", "setmaxpos"):
+            if len(parts) < 2:
+                send_telegram(tg, "Usage: /setmaxpos <n> (e.g. /setmaxpos 2)")
+                continue
+            try:
+                v = int(parts[1])
+                if v < 1 or v > 20:
+                    raise ValueError("range")
+            except Exception:
+                send_telegram(tg, "Invalid max positions. Allowed range: 1 ~ 20")
+                continue
+            state["pending_change"] = {"cmd": "setmaxpos", "value": v, "requested_at": now_tz(cfg["logging"]["tz"]).isoformat()}
+            write_state(state_path, state)
+            send_telegram(tg, _build_confirm_text(state["pending_change"]))
+        elif cmd in ("/confirm", "confirm"):
+            pending = state.get("pending_change") or {}
+            pcmd = pending.get("cmd")
+            pval = pending.get("value")
+            if not pcmd:
+                send_telegram(tg, "No pending change.")
+                continue
+            if pcmd == "setrisk":
+                old = cfg["risk"].get("per_trade_risk_pct")
+                cfg["risk"]["per_trade_risk_pct"] = float(pval)
+                logging.getLogger("bot").info("CMD setrisk applied: %s -> %s", old, pval)
+                send_telegram(tg, f"✅ per_trade_risk_pct updated: {old} -> {pval}")
+            elif pcmd == "setmaxpos":
+                old = cfg["risk"].get("max_concurrent_positions")
+                cfg["risk"]["max_concurrent_positions"] = int(pval)
+                logging.getLogger("bot").info("CMD setmaxpos applied: %s -> %s", old, pval)
+                send_telegram(tg, f"✅ max_concurrent_positions updated: {old} -> {pval}")
+            state.pop("pending_change", None)
+            write_state(state_path, state)
+        elif cmd in ("/cancel", "cancel"):
+            state.pop("pending_change", None)
+            write_state(state_path, state)
+            send_telegram(tg, "Cancelled pending change.")
         elif cmd in ("/pause", "pause"):
             if not state.get("bot_paused", False):
                 state["bot_paused"] = True
@@ -333,7 +395,7 @@ def poll_telegram_commands(tg, offset, cfg, state, equity_now, base_ccy, state_p
                 write_state(state_path, state)
             send_telegram(tg, "▶️ Bot resumed.")
         elif cmd in ("/help", "help"):
-            send_telegram(tg, "Available commands: /status, /positions, /risk, /pause, /resume, /help")
+            send_telegram(tg, "Available commands: /status, /positions, /risk, /setrisk, /setmaxpos, /confirm, /cancel, /pause, /resume, /help")
 
     return offset
 
