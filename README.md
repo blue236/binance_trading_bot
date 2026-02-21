@@ -74,3 +74,9 @@ export BTB_CREDENTIALS_PASSPHRASE='use-a-long-random-passphrase'
 ```
 
 Environment variables (`BINANCE_API_KEY`, `BINANCE_API_SECRET`, etc.) still override stored values.
+
+## Operational docs
+
+- QA release gate checklist: `QA_RELEASE_GATE_CHECKLIST.md`
+- Security cookie policy: `SECURITY_COOKIE_POLICY.md`
+- Mobile web QA report: `MOBILE_WEB_QA_REPORT.md`
