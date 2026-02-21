@@ -580,6 +580,34 @@ def set_cooldown(state, symbol, now):
 def daily_key(now):
     return now.strftime("%Y-%m-%d")
 
+def sync_external_controls(state_path, state, cfg):
+    """Merge externally-updated control flags from state file.
+
+    This allows Telegram commands handled by web server to affect running bot.
+    """
+    try:
+        disk = read_state(state_path)
+    except Exception:
+        return state
+
+    if "bot_paused" in disk:
+        state["bot_paused"] = bool(disk.get("bot_paused", False))
+
+    ro = disk.get("runtime_overrides") or {}
+    if isinstance(ro, dict):
+        if "per_trade_risk_pct" in ro:
+            try:
+                cfg["risk"]["per_trade_risk_pct"] = float(ro["per_trade_risk_pct"])
+            except Exception:
+                pass
+        if "max_concurrent_positions" in ro:
+            try:
+                cfg["risk"]["max_concurrent_positions"] = int(ro["max_concurrent_positions"])
+            except Exception:
+                pass
+    return state
+
+
 def daily_pnl_guard(cfg, equity_now, equity_start):
     if equity_start <= 0:
         return False
@@ -661,6 +689,7 @@ def main():
         loop_ts = now_tz(tzname)
         try:
             logger.debug("Loop start: %s", loop_ts.isoformat())
+            state = sync_external_controls(state_path, state, cfg)
             # daily rollover
             dk = daily_key(loop_ts)
             # print dk, session_date

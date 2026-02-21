@@ -239,23 +239,26 @@ def _poll_server_telegram_commands() -> None:
         if not text.startswith("/"):
             continue
 
-        if text.startswith("/start"):
+        cfg = _load_main_cfg()
+        state = _load_main_state(cfg)
+        parts = text.split()
+        cmd = parts[0].lower() if parts else ""
+
+        if cmd == "/start":
             if _is_ai_running():
                 _notify_telegram("✅ AI bot already running.")
             else:
                 _start_ai_bot()
                 _notify_telegram("🟢 AI bot started from Telegram command")
-        elif text.startswith("/stop"):
+        elif cmd == "/stop":
             if _is_ai_running():
                 _stop_ai_bot()
                 _notify_telegram("🛑 AI bot stopped from Telegram command")
             else:
                 _notify_telegram("✅ AI bot already stopped.")
-        elif text.startswith("/status"):
+        elif cmd == "/status":
             _notify_telegram(_server_status_text())
-        elif text.startswith("/positions"):
-            cfg = _load_main_cfg()
-            state = _load_main_state(cfg)
+        elif cmd == "/positions":
             positions = state.get("positions") or {}
             if not positions:
                 _notify_telegram("No open positions.")
@@ -264,8 +267,7 @@ def _poll_server_telegram_commands() -> None:
                 for sym, pos in positions.items():
                     lines.append(f"- {sym}: qty={pos.get('qty')} entry={float(pos.get('entry_price', 0.0)):.4f} sl={float(pos.get('sl', 0.0)):.4f}")
                 _notify_telegram("\n".join(lines)[:3900])
-        elif text.startswith("/risk"):
-            cfg = _load_main_cfg()
+        elif cmd == "/risk":
             risk = cfg.get("risk") or {}
             _notify_telegram(
                 "🛡 Risk config\n"
@@ -274,8 +276,70 @@ def _poll_server_telegram_commands() -> None:
                 f"max_concurrent_positions: {risk.get('max_concurrent_positions')}\n"
                 f"cooldown_hours: {risk.get('cooldown_hours')}"
             )
-        elif text.startswith("/help"):
-            _notify_telegram("Available commands: /status, /positions, /risk, /start, /stop, /help")
+        elif cmd == "/setrisk":
+            if len(parts) < 2:
+                _notify_telegram("Usage: /setrisk <percent>")
+            else:
+                try:
+                    v = float(parts[1])
+                    if v < 0.05 or v > 5.0:
+                        raise ValueError("range")
+                    pending = {"cmd": "setrisk", "value": v, "requested_at": time.time()}
+                    state["pending_change"] = pending
+                    _write_main_state(cfg, state)
+                    _notify_telegram(f"Pending change: setrisk -> {v}\nReply /confirm to apply or /cancel to discard.")
+                except Exception:
+                    _notify_telegram("Invalid risk. Allowed range: 0.05 ~ 5.0")
+        elif cmd == "/setmaxpos":
+            if len(parts) < 2:
+                _notify_telegram("Usage: /setmaxpos <n>")
+            else:
+                try:
+                    v = int(parts[1])
+                    if v < 1 or v > 20:
+                        raise ValueError("range")
+                    pending = {"cmd": "setmaxpos", "value": v, "requested_at": time.time()}
+                    state["pending_change"] = pending
+                    _write_main_state(cfg, state)
+                    _notify_telegram(f"Pending change: setmaxpos -> {v}\nReply /confirm to apply or /cancel to discard.")
+                except Exception:
+                    _notify_telegram("Invalid max positions. Allowed range: 1 ~ 20")
+        elif cmd == "/confirm":
+            pending = state.get("pending_change") or {}
+            pcmd = pending.get("cmd")
+            pval = pending.get("value")
+            if not pcmd:
+                _notify_telegram("No pending change.")
+            elif pcmd == "setrisk":
+                old = (cfg.get("risk") or {}).get("per_trade_risk_pct")
+                cfg.setdefault("risk", {})["per_trade_risk_pct"] = float(pval)
+                state.setdefault("runtime_overrides", {})["per_trade_risk_pct"] = float(pval)
+                state.pop("pending_change", None)
+                _save_main_cfg(cfg)
+                _write_main_state(cfg, state)
+                _notify_telegram(f"✅ per_trade_risk_pct updated: {old} -> {pval}")
+            elif pcmd == "setmaxpos":
+                old = (cfg.get("risk") or {}).get("max_concurrent_positions")
+                cfg.setdefault("risk", {})["max_concurrent_positions"] = int(pval)
+                state.setdefault("runtime_overrides", {})["max_concurrent_positions"] = int(pval)
+                state.pop("pending_change", None)
+                _save_main_cfg(cfg)
+                _write_main_state(cfg, state)
+                _notify_telegram(f"✅ max_concurrent_positions updated: {old} -> {pval}")
+        elif cmd == "/cancel":
+            state.pop("pending_change", None)
+            _write_main_state(cfg, state)
+            _notify_telegram("Cancelled pending change.")
+        elif cmd == "/pause":
+            state["bot_paused"] = True
+            _write_main_state(cfg, state)
+            _notify_telegram("⏸ Bot is now PAUSED.")
+        elif cmd == "/resume":
+            state["bot_paused"] = False
+            _write_main_state(cfg, state)
+            _notify_telegram("▶️ Bot resumed.")
+        elif cmd == "/help":
+            _notify_telegram("Available commands: /status, /positions, /risk, /setrisk, /setmaxpos, /confirm, /cancel, /pause, /resume, /help")
         elif text.startswith("approve ") or text.startswith("deny ") or text.startswith("/approve ") or text.startswith("/deny "):
             _append_inbox(chat_id, text)
 
@@ -314,6 +378,21 @@ def _load_main_state(cfg: dict) -> dict:
         return {"positions": {}}
 
 
+def _main_state_path(cfg: dict) -> Path:
+    state_rel = (cfg.get("logging") or {}).get("state_file") or "./state.json"
+    return (ROOT / state_rel).resolve()
+
+
+def _write_main_state(cfg: dict, state: dict) -> None:
+    p = _main_state_path(cfg)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(state, ensure_ascii=False, indent=2))
+
+
+def _save_main_cfg(cfg: dict) -> None:
+    AI_CONFIG_PATH.write_text(yaml.safe_dump(cfg, sort_keys=False))
+
+
 def _server_status_text() -> str:
     running = _is_ai_running()
     cfg = _load_main_cfg()
@@ -322,9 +401,10 @@ def _server_status_text() -> str:
     risk = cfg.get("risk") or {}
     syms = (cfg.get("general") or {}).get("symbols") or []
     base = (cfg.get("general") or {}).get("base_currency") or "USDT"
+    paused = bool(state.get("bot_paused", False))
     return (
         "📊 Current status\n"
-        f"mode: {'RUNNING' if running else 'STOPPED'}\n"
+        f"mode: {'PAUSED' if paused else ('RUNNING' if running else 'STOPPED')}\n"
         f"dry_run: {(cfg.get('general') or {}).get('dry_run')}\n"
         f"base_currency: {base}\n"
         f"open_positions: {len(positions)}\n"
