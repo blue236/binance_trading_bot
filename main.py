@@ -187,31 +187,44 @@ def send_telegram(tg, text):
         print("Telegram send failed:", e, file=sys.stderr)
 
 
-def init_telegram_offset(tg):
-    if tg is None:
+def _inbox_path():
+    return os.path.join(os.getcwd(), ".telegram_inbox.jsonl")
+
+
+def _approval_from_inbox(token: str, since_ts: float):
+    p = _inbox_path()
+    if not os.path.exists(p):
         return None
     try:
-        data = _tg_post(tg["token"], "getUpdates", {"timeout": 0})
-        updates = data.get("result", []) if isinstance(data, dict) else []
-        if not updates:
-            return None
-        return int(updates[-1].get("update_id", 0)) + 1
+        with open(p, "r", encoding="utf-8", errors="ignore") as f:
+            lines = f.readlines()[-500:]
+        approve_cmds = {f"approve {token}", f"/approve {token}"}
+        deny_cmds = {f"deny {token}", f"/deny {token}"}
+        for ln in reversed(lines):
+            try:
+                rec = json.loads(ln)
+            except Exception:
+                continue
+            ts = float(rec.get("ts", 0.0) or 0.0)
+            if ts + 1 < since_ts:
+                continue
+            txt = str(rec.get("text", "")).strip().lower()
+            if txt in approve_cmds:
+                return True
+            if txt in deny_cmds:
+                return False
     except Exception:
         return None
+    return None
 
 
 def request_trade_approval(tg, action, symbol, qty, price, timeout_sec, offset=None):
-    """Request manual approval via Telegram.
-
-    User should reply in chat with one of:
-    - APPROVE <token>
-    - DENY <token>
-    """
+    """Request manual approval via Telegram (handled by unified server inbox)."""
     if tg is None:
         return False, offset
 
     chat_id = tg["chat_id"]
-    token = str(int(time.time()))[-6:]
+    token = str(int(time.time() * 1000))[-9:]
     prompt = (
         f"🟡 APPROVAL REQUIRED\n"
         f"Action: {action}\n"
@@ -224,39 +237,22 @@ def request_trade_approval(tg, action, symbol, qty, price, timeout_sec, offset=N
         f"DENY {token}\n"
         f"Timeout: {timeout_sec}s"
     )
+    sent_at = time.time()
     try:
         _tg_post(tg["token"], "sendMessage", {"chat_id": chat_id, "text": prompt[:4000]})
     except Exception:
         return False, offset
 
     deadline = time.time() + max(5, int(timeout_sec))
-    chat_id_str = str(chat_id)
     while time.time() < deadline:
-        try:
-            params = {"timeout": 10}
-            if offset is not None:
-                params["offset"] = int(offset)
-            data = _tg_post(tg["token"], "getUpdates", params)
-            updates = data.get("result", []) if isinstance(data, dict) else []
-        except Exception:
-            time.sleep(1)
-            continue
-
-        for upd in updates:
-            offset = int(upd.get("update_id", 0)) + 1
-            msg = upd.get("message") or {}
-            c = str((msg.get("chat") or {}).get("id", ""))
-            if c != chat_id_str:
-                continue
-            txt = str(msg.get("text") or "").strip().lower()
-            approve_cmd = f"approve {token}".lower()
-            deny_cmd = f"deny {token}".lower()
-            if txt == approve_cmd or txt == f"/approve {token}".lower():
-                send_telegram(tg, f"✅ Approved: {action} {symbol}")
-                return True, offset
-            if txt == deny_cmd or txt == f"/deny {token}".lower():
-                send_telegram(tg, f"❌ Denied: {action} {symbol}")
-                return False, offset
+        decision = _approval_from_inbox(token, sent_at)
+        if decision is True:
+            send_telegram(tg, f"✅ Approved: {action} {symbol}")
+            return True, offset
+        if decision is False:
+            send_telegram(tg, f"❌ Denied: {action} {symbol}")
+            return False, offset
+        time.sleep(1)
 
     send_telegram(tg, f"⌛ Approval timeout: {action} {symbol}")
     return False, offset
@@ -630,7 +626,7 @@ def main():
     logger = setup_logger(cfg["logging"]["csv_dir"], level=cfg.get("logging", {}).get("level", "INFO"))
     exchange = connect_exchange(cfg)
     tg = connect_telegram(cfg)
-    tg_offset = init_telegram_offset(tg)
+    tg_offset = None
 
     approval_enabled = bool(cfg.get("alerts", {}).get("enable_trade_approval", False))
     approval_timeout_sec = int(cfg.get("alerts", {}).get("approval_timeout_sec", 120) or 120)
@@ -684,7 +680,6 @@ def main():
             balances_total = balances.get("total", {})
             balances_free = balances.get("free", {})
             equity_now = fetch_equity_usdt(exchange, base_ccy, balances_total, tickers)
-            tg_offset = poll_telegram_commands(tg, tg_offset, cfg, state, equity_now, base_ccy, state_path)
             #logger.debug("Tickers: %s. Equity now: %.2f %s", tickers, equity_now, base_ccy)
             logger.debug(
                 "Balances: free_%s=%.6f total_assets=%d tickers=%d",
@@ -699,13 +694,13 @@ def main():
                 logger.warning("Daily loss stop reached. Equity %.2f vs start %.2f", equity_now, equity_start)
                 if tg:
                     send_telegram(tg, f"⛔ Daily loss stop reached. Equity {equity_now:.2f} vs start {equity_start:.2f}. Cooling 60m.")
-                tg_offset = responsive_wait(60*60, tg, tg_offset, cfg, state, equity_now, base_ccy, state_path)
+                time.sleep(60 * 60)
                 continue
 
             if state.get("bot_paused", False):
                 logger.info("Bot paused by Telegram command; skipping trade decisions this cycle.")
                 sleep_sec = int(cfg["strategy"].get("loop_sleep_seconds", 60) or 60)
-                tg_offset = responsive_wait(sleep_sec, tg, tg_offset, cfg, state, equity_now, base_ccy, state_path)
+                time.sleep(sleep_sec)
                 continue
 
             # entry checks
@@ -866,7 +861,7 @@ def main():
             log_csv(csv_dir, "equity", {"ts": loop_ts.isoformat(), "equity": equity_now}, fieldnames=EQUITY_FIELDS)
             sleep_sec = int(cfg["strategy"].get("loop_sleep_seconds", 60) or 60)
             logger.info("Equity snapshot: %.4f and sleep %d seconds", equity_now, sleep_sec)
-            tg_offset = responsive_wait(sleep_sec, tg, tg_offset, cfg, state, equity_now, base_ccy, state_path)
+            time.sleep(sleep_sec)
         except Exception as e:
             logger.exception("Loop error: %s", e)
             time.sleep(10)

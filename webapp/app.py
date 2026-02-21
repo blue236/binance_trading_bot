@@ -203,11 +203,18 @@ def _save_offset(v: int) -> None:
     _offset_path().write_text(str(int(v)))
 
 
-def _poll_server_telegram_commands() -> None:
-    # Server-side command fallback when AI bot is not running.
-    if _is_ai_running():
-        return
+def _inbox_path() -> Path:
+    return ROOT / ".telegram_inbox.jsonl"
 
+
+def _append_inbox(chat_id: str, text: str) -> None:
+    rec = {"ts": time.time(), "chat_id": str(chat_id), "text": str(text or "")}
+    with _inbox_path().open("a", encoding="utf-8") as f:
+        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+
+
+def _poll_server_telegram_commands() -> None:
+    # Unified Telegram command handler at web server level.
     d = _load_secrets()
     token = str(d.get("telegram_bot_token", "") or "").strip()
     chat_id = str(d.get("telegram_chat_id", "") or "").strip()
@@ -233,16 +240,24 @@ def _poll_server_telegram_commands() -> None:
             continue
 
         if text.startswith("/start"):
-            _start_ai_bot()
-            _notify_telegram("🟢 AI bot started from Telegram command")
+            if _is_ai_running():
+                _notify_telegram("✅ AI bot already running.")
+            else:
+                _start_ai_bot()
+                _notify_telegram("🟢 AI bot started from Telegram command")
         elif text.startswith("/stop"):
-            _stop_ai_bot()
-            _notify_telegram("🛑 AI bot stopped from Telegram command")
+            if _is_ai_running():
+                _stop_ai_bot()
+                _notify_telegram("🛑 AI bot stopped from Telegram command")
+            else:
+                _notify_telegram("✅ AI bot already stopped.")
         elif text.startswith("/status"):
             running = _is_ai_running()
             _notify_telegram(f"BTB server is alive. AI bot is {'RUNNING' if running else 'STOPPED'}.")
         elif text.startswith("/help"):
-            _notify_telegram("Server commands: /status, /start, /stop, /help")
+            _notify_telegram("Available commands: /status, /start, /stop, /help")
+        elif text.startswith("approve ") or text.startswith("deny ") or text.startswith("/approve ") or text.startswith("/deny "):
+            _append_inbox(chat_id, text)
 
     if new_offset is not None:
         _save_offset(new_offset)
