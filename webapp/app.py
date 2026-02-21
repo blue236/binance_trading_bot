@@ -339,7 +339,7 @@ def _poll_server_telegram_commands() -> None:
             _write_main_state(cfg, state)
             _notify_telegram("▶️ Bot resumed.")
         elif cmd == "/help":
-            _notify_telegram("Available commands: /status, /positions, /risk, /setrisk, /setmaxpos, /confirm, /cancel, /pause, /resume, /help")
+            _notify_telegram("Available commands: /status, /positions, /risk, /setrisk, /setmaxpos, /confirm, /cancel, /pause, /resume, /start, /stop, /help")
         elif text.startswith("approve ") or text.startswith("deny ") or text.startswith("/approve ") or text.startswith("/deny "):
             _append_inbox(chat_id, text)
 
