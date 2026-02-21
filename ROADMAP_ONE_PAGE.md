@@ -85,6 +85,11 @@ Ship a secure, testable, production-ready trading platform with:
   - Default deny on timeout
   - Log approval decision in trade events
 
+## Next sprint backlog update (2026-02-19)
+- **Mobile web full support (responsive UI + mobile UX optimization)**
+- **Allow external IP access only with mandatory login/authentication**
+- Detailed tasks/security plan tracked in: `NEXT_SPRINT_BACKLOG.md`
+
 ## Weekly operating rhythm
 - Daily 15-min standup
 - Architect design review 2x/week

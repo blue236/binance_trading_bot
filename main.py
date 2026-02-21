@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import os, sys, time, json, math, traceback, logging
+import os, sys, time, json, math, traceback, logging, secrets
 import urllib.parse
 import urllib.request
 import pandas as pd
@@ -301,9 +301,12 @@ def _risk_text(cfg):
 def _build_confirm_text(pending):
     if not pending:
         return "No pending change."
+    token = str(pending.get("token") or "")
+    ttl = int(pending.get("expires_at", 0) - time.time()) if pending.get("expires_at") else 0
+    ttl = max(ttl, 0)
     return (
         f"Pending change: {pending.get('cmd')} -> {pending.get('value')}\n"
-        "Reply /confirm to apply or /cancel to discard."
+        f"Reply /confirm {token} to apply (expires in {ttl}s) or /cancel to discard."
     )
 
 
@@ -330,6 +333,11 @@ def poll_telegram_commands(tg, offset, cfg, state, equity_now, base_ccy, state_p
         cmd = txt.lower()
         parts = txt.split()
         root = (parts[0].lower() if parts else "")
+        pending = state.get("pending_change") or {}
+        if pending and int(time.time()) > int(pending.get("expires_at", 0)):
+            audit_log(cfg["logging"]["csv_dir"], "COMMAND_EXPIRED", {"cmd": pending.get("cmd"), "token": pending.get("token")})
+            state.pop("pending_change", None)
+            write_state(state_path, state)
 
         if cmd in ("/status", "status"):
             send_telegram(tg, _status_text(cfg, state, equity_now, base_ccy))
@@ -358,11 +366,20 @@ def poll_telegram_commands(tg, offset, cfg, state, equity_now, base_ccy, state_p
                 if v < 0.05 or v > 5.0:
                     raise ValueError("range")
             except Exception:
+                audit_log(cfg["logging"]["csv_dir"], "COMMAND_VALIDATION_FAILED", {"cmd": "setrisk", "args": txt})
                 send_telegram(tg, "Invalid risk. Allowed range: 0.05 ~ 5.0")
                 continue
-            state["pending_change"] = {"cmd": "setrisk", "value": v, "requested_at": now_tz(cfg["logging"]["tz"]).isoformat()}
+            token = secrets.token_hex(3)
+            state["pending_change"] = {
+                "cmd": "setrisk", "value": v, "token": token,
+                "requested_at": now_tz(cfg["logging"]["tz"]).isoformat(),
+                "expires_at": int(time.time()) + 120,
+                "user_id": str(msg.get("from", {}).get("id", "")),
+                "username": str(msg.get("from", {}).get("username", "")),
+                "chat_id": c,
+            }
             write_state(state_path, state)
-            audit_log(cfg["logging"]["csv_dir"], "COMMAND_CONFIRM_ISSUED", {"cmd": "setrisk", "value": v})
+            audit_log(cfg["logging"]["csv_dir"], "COMMAND_CONFIRM_ISSUED", {"cmd": "setrisk", "value": v, "token": token, "user_id": state["pending_change"]["user_id"]})
             send_telegram(tg, _build_confirm_text(state["pending_change"]))
         elif root in ("/setmaxpos", "setmaxpos"):
             if len(parts) < 2:
@@ -373,11 +390,20 @@ def poll_telegram_commands(tg, offset, cfg, state, equity_now, base_ccy, state_p
                 if v < 1 or v > 20:
                     raise ValueError("range")
             except Exception:
+                audit_log(cfg["logging"]["csv_dir"], "COMMAND_VALIDATION_FAILED", {"cmd": "setmaxpos", "args": txt})
                 send_telegram(tg, "Invalid max positions. Allowed range: 1 ~ 20")
                 continue
-            state["pending_change"] = {"cmd": "setmaxpos", "value": v, "requested_at": now_tz(cfg["logging"]["tz"]).isoformat()}
+            token = secrets.token_hex(3)
+            state["pending_change"] = {
+                "cmd": "setmaxpos", "value": v, "token": token,
+                "requested_at": now_tz(cfg["logging"]["tz"]).isoformat(),
+                "expires_at": int(time.time()) + 120,
+                "user_id": str(msg.get("from", {}).get("id", "")),
+                "username": str(msg.get("from", {}).get("username", "")),
+                "chat_id": c,
+            }
             write_state(state_path, state)
-            audit_log(cfg["logging"]["csv_dir"], "COMMAND_CONFIRM_ISSUED", {"cmd": "setmaxpos", "value": v})
+            audit_log(cfg["logging"]["csv_dir"], "COMMAND_CONFIRM_ISSUED", {"cmd": "setmaxpos", "value": v, "token": token, "user_id": state["pending_change"]["user_id"]})
             send_telegram(tg, _build_confirm_text(state["pending_change"]))
         elif root in ("/setcooldown", "setcooldown"):
             if len(parts) < 2:
@@ -388,11 +414,20 @@ def poll_telegram_commands(tg, offset, cfg, state, equity_now, base_ccy, state_p
                 if v < 0 or v > 72:
                     raise ValueError("range")
             except Exception:
+                audit_log(cfg["logging"]["csv_dir"], "COMMAND_VALIDATION_FAILED", {"cmd": "setcooldown", "args": txt})
                 send_telegram(tg, "Invalid cooldown. Allowed range: 0 ~ 72")
                 continue
-            state["pending_change"] = {"cmd": "setcooldown", "value": v, "requested_at": now_tz(cfg["logging"]["tz"]).isoformat()}
+            token = secrets.token_hex(3)
+            state["pending_change"] = {
+                "cmd": "setcooldown", "value": v, "token": token,
+                "requested_at": now_tz(cfg["logging"]["tz"]).isoformat(),
+                "expires_at": int(time.time()) + 120,
+                "user_id": str(msg.get("from", {}).get("id", "")),
+                "username": str(msg.get("from", {}).get("username", "")),
+                "chat_id": c,
+            }
             write_state(state_path, state)
-            audit_log(cfg["logging"]["csv_dir"], "COMMAND_CONFIRM_ISSUED", {"cmd": "setcooldown", "value": v})
+            audit_log(cfg["logging"]["csv_dir"], "COMMAND_CONFIRM_ISSUED", {"cmd": "setcooldown", "value": v, "token": token, "user_id": state["pending_change"]["user_id"]})
             send_telegram(tg, _build_confirm_text(state["pending_change"]))
         elif root in ("/mode", "mode"):
             if len(parts) < 2:
@@ -400,6 +435,7 @@ def poll_telegram_commands(tg, offset, cfg, state, equity_now, base_ccy, state_p
                 continue
             mode = str(parts[1]).strip().lower()
             if mode not in ("safe", "normal", "aggressive"):
+                audit_log(cfg["logging"]["csv_dir"], "COMMAND_VALIDATION_FAILED", {"cmd": "mode", "args": txt})
                 send_telegram(tg, "Invalid mode. Allowed: safe | normal | aggressive")
                 continue
             if "normal_defaults" not in state:
@@ -416,16 +452,44 @@ def poll_telegram_commands(tg, offset, cfg, state, equity_now, base_ccy, state_p
                         "enable_trade_approval": bool(cfg.get("alerts", {}).get("enable_trade_approval", True))
                     }
                 }
-            state["pending_change"] = {"cmd": "mode", "value": mode, "requested_at": now_tz(cfg["logging"]["tz"]).isoformat()}
+            token = secrets.token_hex(3)
+            state["pending_change"] = {
+                "cmd": "mode", "value": mode, "token": token,
+                "requested_at": now_tz(cfg["logging"]["tz"]).isoformat(),
+                "expires_at": int(time.time()) + 120,
+                "user_id": str(msg.get("from", {}).get("id", "")),
+                "username": str(msg.get("from", {}).get("username", "")),
+                "chat_id": c,
+            }
             write_state(state_path, state)
-            audit_log(cfg["logging"]["csv_dir"], "COMMAND_CONFIRM_ISSUED", {"cmd": "mode", "value": mode})
+            audit_log(cfg["logging"]["csv_dir"], "COMMAND_CONFIRM_ISSUED", {"cmd": "mode", "value": mode, "token": token, "user_id": state["pending_change"]["user_id"]})
             send_telegram(tg, _build_confirm_text(state["pending_change"]))
-        elif cmd in ("/confirm", "confirm"):
+        elif root in ("/confirm", "confirm"):
             pending = state.get("pending_change") or {}
             pcmd = pending.get("cmd")
             pval = pending.get("value")
+            token_in = parts[1].strip().lower() if len(parts) >= 2 else ""
             if not pcmd:
                 send_telegram(tg, "No pending change.")
+                continue
+            if not token_in:
+                send_telegram(tg, "Usage: /confirm <token>")
+                continue
+            if token_in != str(pending.get("token", "")).lower():
+                audit_log(cfg["logging"]["csv_dir"], "COMMAND_DENIED", {"reason": "token_mismatch", "cmd": pcmd, "user_id": str(msg.get("from", {}).get("id", ""))})
+                send_telegram(tg, "Invalid confirm token.")
+                continue
+            if int(time.time()) > int(pending.get("expires_at", 0)):
+                state.pop("pending_change", None)
+                write_state(state_path, state)
+                audit_log(cfg["logging"]["csv_dir"], "COMMAND_EXPIRED", {"cmd": pcmd, "token": token_in})
+                send_telegram(tg, "Pending change expired. Please submit command again.")
+                continue
+            req_user = str(pending.get("user_id", ""))
+            cur_user = str(msg.get("from", {}).get("id", ""))
+            if req_user and cur_user != req_user:
+                audit_log(cfg["logging"]["csv_dir"], "COMMAND_DENIED", {"reason": "user_mismatch", "cmd": pcmd, "requested_user": req_user, "user_id": cur_user})
+                send_telegram(tg, "Only the requester can confirm this change.")
                 continue
             if pcmd == "setrisk":
                 old = cfg["risk"].get("per_trade_risk_pct")
@@ -480,9 +544,15 @@ def poll_telegram_commands(tg, offset, cfg, state, equity_now, base_ccy, state_p
             write_state(state_path, state)
         elif cmd in ("/cancel", "cancel"):
             pending = state.get("pending_change") or {}
+            req_user = str(pending.get("user_id", ""))
+            cur_user = str(msg.get("from", {}).get("id", ""))
+            if pending and req_user and cur_user != req_user:
+                audit_log(cfg["logging"]["csv_dir"], "COMMAND_DENIED", {"reason": "cancel_user_mismatch", "cmd": pending.get("cmd"), "requested_user": req_user, "user_id": cur_user})
+                send_telegram(tg, "Only the requester can cancel this pending change.")
+                continue
             state.pop("pending_change", None)
             write_state(state_path, state)
-            audit_log(cfg["logging"]["csv_dir"], "COMMAND_CANCELLED", {"cmd": pending.get("cmd")})
+            audit_log(cfg["logging"]["csv_dir"], "COMMAND_CANCELLED", {"cmd": pending.get("cmd"), "user_id": cur_user})
             send_telegram(tg, "Cancelled pending change.")
         elif cmd in ("/pause", "pause"):
             if not state.get("bot_paused", False):
