@@ -322,6 +322,11 @@ def poll_telegram_commands(tg, offset, cfg, state, equity_now, base_ccy, state_p
 
         if cmd in ("/status", "status"):
             send_telegram(tg, _status_text(cfg, state, equity_now, base_ccy))
+        elif cmd in ("/start", "start"):
+            send_telegram(tg, "✅ AI bot already running.")
+        elif cmd in ("/stop", "stop"):
+            send_telegram(tg, "🛑 Stopping AI bot by Telegram command.")
+            raise SystemExit(0)
         elif cmd in ("/positions", "positions"):
             positions = state.get("positions", {}) if isinstance(state, dict) else {}
             if not positions:
@@ -395,7 +400,7 @@ def poll_telegram_commands(tg, offset, cfg, state, equity_now, base_ccy, state_p
                 write_state(state_path, state)
             send_telegram(tg, "▶️ Bot resumed.")
         elif cmd in ("/help", "help"):
-            send_telegram(tg, "Available commands: /status, /positions, /risk, /setrisk, /setmaxpos, /confirm, /cancel, /pause, /resume, /help")
+            send_telegram(tg, "Available commands: /status, /positions, /risk, /setrisk, /setmaxpos, /confirm, /cancel, /pause, /resume, /start, /stop, /help")
 
     return offset
 

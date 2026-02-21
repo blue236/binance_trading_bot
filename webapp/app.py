@@ -205,6 +205,9 @@ def _save_offset(v: int) -> None:
 
 def _poll_server_telegram_commands() -> None:
     # Server-side command fallback when AI bot is not running.
+    if _is_ai_running():
+        return
+
     d = _load_secrets()
     token = str(d.get("telegram_bot_token", "") or "").strip()
     chat_id = str(d.get("telegram_chat_id", "") or "").strip()
