@@ -117,6 +117,18 @@ def log_csv(csv_dir, name, row, fieldnames=None):
             writer.writeheader()
         writer.writerow(row)
 
+
+def audit_log(csv_dir, event, payload):
+    ensure_dir(csv_dir)
+    fpath = os.path.join(csv_dir, "audit.log")
+    rec = {
+        "ts": datetime.utcnow().isoformat() + "Z",
+        "event": event,
+        **(payload or {}),
+    }
+    with open(fpath, "a") as fp:
+        fp.write(json.dumps(rec, ensure_ascii=False) + "\n")
+
 def connect_exchange(cfg):
     ex_id = cfg["general"]["exchange"]
     creds = cfg["credentials"]
@@ -262,9 +274,12 @@ def _status_text(cfg, state, equity_now, base_ccy):
     positions = state.get("positions", {}) if isinstance(state, dict) else {}
     syms = cfg.get("general", {}).get("symbols", [])
     paused = bool(state.get("bot_paused", False)) if isinstance(state, dict) else False
+    runtime_mode = (state.get("runtime_mode") if isinstance(state, dict) else None) or (
+        "aggressive" if cfg.get("general", {}).get("aggressive_mode") else "normal"
+    )
     return (
         "📊 Current status\n"
-        f"mode: {'PAUSED' if paused else 'RUNNING'}\n"
+        f"mode: {'PAUSED' if paused else 'RUNNING'} / strategy_mode: {runtime_mode}\n"
         f"dry_run: {cfg.get('general', {}).get('dry_run')}\n"
         f"equity: {float(equity_now):.2f} {base_ccy}\n"
         f"open_positions: {len(positions)}\n"
@@ -347,6 +362,7 @@ def poll_telegram_commands(tg, offset, cfg, state, equity_now, base_ccy, state_p
                 continue
             state["pending_change"] = {"cmd": "setrisk", "value": v, "requested_at": now_tz(cfg["logging"]["tz"]).isoformat()}
             write_state(state_path, state)
+            audit_log(cfg["logging"]["csv_dir"], "COMMAND_CONFIRM_ISSUED", {"cmd": "setrisk", "value": v})
             send_telegram(tg, _build_confirm_text(state["pending_change"]))
         elif root in ("/setmaxpos", "setmaxpos"):
             if len(parts) < 2:
@@ -361,6 +377,48 @@ def poll_telegram_commands(tg, offset, cfg, state, equity_now, base_ccy, state_p
                 continue
             state["pending_change"] = {"cmd": "setmaxpos", "value": v, "requested_at": now_tz(cfg["logging"]["tz"]).isoformat()}
             write_state(state_path, state)
+            audit_log(cfg["logging"]["csv_dir"], "COMMAND_CONFIRM_ISSUED", {"cmd": "setmaxpos", "value": v})
+            send_telegram(tg, _build_confirm_text(state["pending_change"]))
+        elif root in ("/setcooldown", "setcooldown"):
+            if len(parts) < 2:
+                send_telegram(tg, "Usage: /setcooldown <hours> (e.g. /setcooldown 8)")
+                continue
+            try:
+                v = int(parts[1])
+                if v < 0 or v > 72:
+                    raise ValueError("range")
+            except Exception:
+                send_telegram(tg, "Invalid cooldown. Allowed range: 0 ~ 72")
+                continue
+            state["pending_change"] = {"cmd": "setcooldown", "value": v, "requested_at": now_tz(cfg["logging"]["tz"]).isoformat()}
+            write_state(state_path, state)
+            audit_log(cfg["logging"]["csv_dir"], "COMMAND_CONFIRM_ISSUED", {"cmd": "setcooldown", "value": v})
+            send_telegram(tg, _build_confirm_text(state["pending_change"]))
+        elif root in ("/mode", "mode"):
+            if len(parts) < 2:
+                send_telegram(tg, "Usage: /mode <safe|normal|aggressive>")
+                continue
+            mode = str(parts[1]).strip().lower()
+            if mode not in ("safe", "normal", "aggressive"):
+                send_telegram(tg, "Invalid mode. Allowed: safe | normal | aggressive")
+                continue
+            if "normal_defaults" not in state:
+                state["normal_defaults"] = {
+                    "risk": {
+                        "per_trade_risk_pct": cfg.get("risk", {}).get("per_trade_risk_pct", 0.5),
+                        "max_concurrent_positions": cfg.get("risk", {}).get("max_concurrent_positions", 2),
+                        "cooldown_hours": cfg.get("risk", {}).get("cooldown_hours", 8),
+                    },
+                    "general": {
+                        "aggressive_mode": bool(cfg.get("general", {}).get("aggressive_mode", False))
+                    },
+                    "alerts": {
+                        "enable_trade_approval": bool(cfg.get("alerts", {}).get("enable_trade_approval", True))
+                    }
+                }
+            state["pending_change"] = {"cmd": "mode", "value": mode, "requested_at": now_tz(cfg["logging"]["tz"]).isoformat()}
+            write_state(state_path, state)
+            audit_log(cfg["logging"]["csv_dir"], "COMMAND_CONFIRM_ISSUED", {"cmd": "mode", "value": mode})
             send_telegram(tg, _build_confirm_text(state["pending_change"]))
         elif cmd in ("/confirm", "confirm"):
             pending = state.get("pending_change") or {}
@@ -373,17 +431,58 @@ def poll_telegram_commands(tg, offset, cfg, state, equity_now, base_ccy, state_p
                 old = cfg["risk"].get("per_trade_risk_pct")
                 cfg["risk"]["per_trade_risk_pct"] = float(pval)
                 logging.getLogger("bot").info("CMD setrisk applied: %s -> %s", old, pval)
+                audit_log(cfg["logging"]["csv_dir"], "COMMAND_APPLIED", {"cmd": "setrisk", "before": old, "after": pval})
                 send_telegram(tg, f"✅ per_trade_risk_pct updated: {old} -> {pval}")
             elif pcmd == "setmaxpos":
                 old = cfg["risk"].get("max_concurrent_positions")
                 cfg["risk"]["max_concurrent_positions"] = int(pval)
                 logging.getLogger("bot").info("CMD setmaxpos applied: %s -> %s", old, pval)
+                audit_log(cfg["logging"]["csv_dir"], "COMMAND_APPLIED", {"cmd": "setmaxpos", "before": old, "after": pval})
                 send_telegram(tg, f"✅ max_concurrent_positions updated: {old} -> {pval}")
+            elif pcmd == "setcooldown":
+                old = cfg["risk"].get("cooldown_hours")
+                cfg["risk"]["cooldown_hours"] = int(pval)
+                logging.getLogger("bot").info("CMD setcooldown applied: %s -> %s", old, pval)
+                audit_log(cfg["logging"]["csv_dir"], "COMMAND_APPLIED", {"cmd": "setcooldown", "before": old, "after": pval})
+                send_telegram(tg, f"✅ cooldown_hours updated: {old} -> {pval}")
+            elif pcmd == "mode":
+                mode = str(pval)
+                old_mode = state.get("runtime_mode", "aggressive" if cfg.get("general", {}).get("aggressive_mode") else "normal")
+                defaults = state.get("normal_defaults", {})
+                if mode == "safe":
+                    cfg["general"]["aggressive_mode"] = False
+                    cfg["alerts"]["enable_trade_approval"] = True
+                    cfg["risk"]["per_trade_risk_pct"] = min(float(cfg["risk"].get("per_trade_risk_pct", 0.5)), 0.4)
+                    cfg["risk"]["max_concurrent_positions"] = min(int(cfg["risk"].get("max_concurrent_positions", 2)), 1)
+                    cfg["risk"]["cooldown_hours"] = max(int(cfg["risk"].get("cooldown_hours", 8)), 8)
+                elif mode == "normal":
+                    r0 = (defaults.get("risk") or {})
+                    g0 = (defaults.get("general") or {})
+                    a0 = (defaults.get("alerts") or {})
+                    cfg["general"]["aggressive_mode"] = bool(g0.get("aggressive_mode", False))
+                    cfg["alerts"]["enable_trade_approval"] = bool(a0.get("enable_trade_approval", True))
+                    cfg["risk"]["per_trade_risk_pct"] = float(r0.get("per_trade_risk_pct", 0.5))
+                    cfg["risk"]["max_concurrent_positions"] = int(r0.get("max_concurrent_positions", 2))
+                    cfg["risk"]["cooldown_hours"] = int(r0.get("cooldown_hours", 8))
+                elif mode == "aggressive":
+                    cfg["general"]["aggressive_mode"] = True
+                    a = cfg.get("aggressive", {})
+                    ar = a.get("risk", {}) if isinstance(a, dict) else {}
+                    if ar:
+                        cfg["risk"]["per_trade_risk_pct"] = float(ar.get("per_trade_risk_pct", cfg["risk"].get("per_trade_risk_pct", 0.5)))
+                        cfg["risk"]["max_concurrent_positions"] = int(ar.get("max_concurrent_positions", cfg["risk"].get("max_concurrent_positions", 2)))
+                        cfg["risk"]["cooldown_hours"] = int(ar.get("cooldown_hours", cfg["risk"].get("cooldown_hours", 8)))
+                state["runtime_mode"] = mode
+                logging.getLogger("bot").info("CMD mode applied: %s -> %s", old_mode, mode)
+                audit_log(cfg["logging"]["csv_dir"], "COMMAND_APPLIED", {"cmd": "mode", "before": old_mode, "after": mode})
+                send_telegram(tg, f"✅ mode updated: {old_mode} -> {mode}")
             state.pop("pending_change", None)
             write_state(state_path, state)
         elif cmd in ("/cancel", "cancel"):
+            pending = state.get("pending_change") or {}
             state.pop("pending_change", None)
             write_state(state_path, state)
+            audit_log(cfg["logging"]["csv_dir"], "COMMAND_CANCELLED", {"cmd": pending.get("cmd")})
             send_telegram(tg, "Cancelled pending change.")
         elif cmd in ("/pause", "pause"):
             if not state.get("bot_paused", False):
@@ -396,7 +495,7 @@ def poll_telegram_commands(tg, offset, cfg, state, equity_now, base_ccy, state_p
                 write_state(state_path, state)
             send_telegram(tg, "▶️ Bot resumed.")
         elif cmd in ("/help", "help"):
-            send_telegram(tg, "Available commands: /status, /positions, /risk, /setrisk, /setmaxpos, /confirm, /cancel, /pause, /resume, /start, /stop, /help")
+            send_telegram(tg, "Available commands: /status, /positions, /risk, /setrisk, /setmaxpos, /setcooldown, /mode, /confirm, /cancel, /pause, /resume, /start, /stop, /help")
 
     return offset
 
