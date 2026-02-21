@@ -252,10 +252,30 @@ def _poll_server_telegram_commands() -> None:
             else:
                 _notify_telegram("✅ AI bot already stopped.")
         elif text.startswith("/status"):
-            running = _is_ai_running()
-            _notify_telegram(f"BTB server is alive. AI bot is {'RUNNING' if running else 'STOPPED'}.")
+            _notify_telegram(_server_status_text())
+        elif text.startswith("/positions"):
+            cfg = _load_main_cfg()
+            state = _load_main_state(cfg)
+            positions = state.get("positions") or {}
+            if not positions:
+                _notify_telegram("No open positions.")
+            else:
+                lines = ["📌 Open positions"]
+                for sym, pos in positions.items():
+                    lines.append(f"- {sym}: qty={pos.get('qty')} entry={float(pos.get('entry_price', 0.0)):.4f} sl={float(pos.get('sl', 0.0)):.4f}")
+                _notify_telegram("\n".join(lines)[:3900])
+        elif text.startswith("/risk"):
+            cfg = _load_main_cfg()
+            risk = cfg.get("risk") or {}
+            _notify_telegram(
+                "🛡 Risk config\n"
+                f"per_trade_risk_pct: {risk.get('per_trade_risk_pct')}\n"
+                f"daily_loss_stop_pct: {risk.get('daily_loss_stop_pct')}\n"
+                f"max_concurrent_positions: {risk.get('max_concurrent_positions')}\n"
+                f"cooldown_hours: {risk.get('cooldown_hours')}"
+            )
         elif text.startswith("/help"):
-            _notify_telegram("Available commands: /status, /start, /stop, /help")
+            _notify_telegram("Available commands: /status, /positions, /risk, /start, /stop, /help")
         elif text.startswith("approve ") or text.startswith("deny ") or text.startswith("/approve ") or text.startswith("/deny "):
             _append_inbox(chat_id, text)
 
@@ -272,6 +292,45 @@ def _ai_log_path() -> Path:
         except Exception:
             pass
     return (ROOT / "logs" / "bot.log").resolve()
+
+
+def _load_main_cfg() -> dict:
+    if not AI_CONFIG_PATH.exists():
+        return {}
+    try:
+        return yaml.safe_load(AI_CONFIG_PATH.read_text()) or {}
+    except Exception:
+        return {}
+
+
+def _load_main_state(cfg: dict) -> dict:
+    try:
+        state_rel = (cfg.get("logging") or {}).get("state_file") or "./state.json"
+        p = (ROOT / state_rel).resolve()
+        if not p.exists():
+            return {"positions": {}}
+        return json.loads(p.read_text())
+    except Exception:
+        return {"positions": {}}
+
+
+def _server_status_text() -> str:
+    running = _is_ai_running()
+    cfg = _load_main_cfg()
+    state = _load_main_state(cfg)
+    positions = state.get("positions") or {}
+    risk = cfg.get("risk") or {}
+    syms = (cfg.get("general") or {}).get("symbols") or []
+    base = (cfg.get("general") or {}).get("base_currency") or "USDT"
+    return (
+        "📊 Current status\n"
+        f"mode: {'RUNNING' if running else 'STOPPED'}\n"
+        f"dry_run: {(cfg.get('general') or {}).get('dry_run')}\n"
+        f"base_currency: {base}\n"
+        f"open_positions: {len(positions)}\n"
+        f"symbols: {', '.join(syms)}\n"
+        f"risk: per_trade={risk.get('per_trade_risk_pct')}%, max_pos={risk.get('max_concurrent_positions')}"
+    )
 
 
 def _tail_text(path: Path, lines: int = 10) -> str:
