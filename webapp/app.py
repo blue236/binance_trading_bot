@@ -8,6 +8,7 @@ import sys
 import json
 import urllib.parse
 import urllib.request
+import time
 from pathlib import Path
 from typing import Dict
 
@@ -171,6 +172,79 @@ def _notify_telegram(text: str) -> None:
         return
 
 
+def _telegram_get_updates(token: str, offset: int | None = None, timeout: int = 0):
+    url = f"https://api.telegram.org/bot{token}/getUpdates"
+    data = {"timeout": max(0, int(timeout))}
+    if offset is not None:
+        data["offset"] = int(offset)
+    payload = urllib.parse.urlencode(data).encode("utf-8")
+    req = urllib.request.Request(url, data=payload)
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        raw = resp.read().decode("utf-8", errors="ignore")
+    j = json.loads(raw)
+    return j.get("result", []) if isinstance(j, dict) else []
+
+
+def _offset_path() -> Path:
+    return ROOT / ".web_tg_offset"
+
+
+def _load_offset() -> int | None:
+    p = _offset_path()
+    if not p.exists():
+        return None
+    try:
+        return int(p.read_text().strip())
+    except Exception:
+        return None
+
+
+def _save_offset(v: int) -> None:
+    _offset_path().write_text(str(int(v)))
+
+
+def _poll_server_telegram_commands() -> None:
+    # Server-side command fallback when AI bot is not running.
+    d = _load_secrets()
+    token = str(d.get("telegram_bot_token", "") or "").strip()
+    chat_id = str(d.get("telegram_chat_id", "") or "").strip()
+    if not token or not chat_id:
+        return
+
+    offset = _load_offset()
+    try:
+        updates = _telegram_get_updates(token, offset=offset, timeout=0)
+    except Exception:
+        return
+
+    new_offset = offset
+    for upd in updates:
+        uid = int(upd.get("update_id", 0))
+        new_offset = max(new_offset or 0, uid + 1)
+        msg = upd.get("message") or {}
+        c = str((msg.get("chat") or {}).get("id", "")).strip()
+        if c != chat_id:
+            continue
+        text = str(msg.get("text") or "").strip().lower()
+        if not text.startswith("/"):
+            continue
+
+        if text.startswith("/start"):
+            _start_ai_bot()
+            _notify_telegram("🟢 AI bot started from Telegram command")
+        elif text.startswith("/stop"):
+            _stop_ai_bot()
+            _notify_telegram("🛑 AI bot stopped from Telegram command")
+        elif text.startswith("/status"):
+            running = _is_ai_running()
+            _notify_telegram(f"BTB server is alive. AI bot is {'RUNNING' if running else 'STOPPED'}.")
+        elif text.startswith("/help"):
+            _notify_telegram("Server commands: /status, /start, /stop, /help")
+
+    if new_offset is not None:
+        _save_offset(new_offset)
+
+
 def _ai_log_path() -> Path:
     if AI_CONFIG_PATH.exists():
         try:
@@ -212,7 +286,21 @@ def startup():
         scheduler.add_job(lambda: chart_service.refresh_all(cfg), "cron", **parse_cron(cfg.refresh_cron), id="daily_chart_refresh", replace_existing=True)
     except Exception:
         pass
+    # Telegram command polling (server-level fallback, useful when AI bot is down)
+    scheduler.add_job(_poll_server_telegram_commands, "interval", seconds=5, id="telegram_command_poll", replace_existing=True, max_instances=1, coalesce=True)
     scheduler.start()
+
+    # Initialize command offset once to avoid replaying old chat history.
+    if _load_offset() is None:
+        try:
+            d = _load_secrets()
+            token = str(d.get("telegram_bot_token", "") or "").strip()
+            if token:
+                updates = _telegram_get_updates(token, offset=None, timeout=0)
+                if updates:
+                    _save_offset(int(updates[-1].get("update_id", 0)) + 1)
+        except Exception:
+            pass
 
 
 @app.on_event("shutdown")
