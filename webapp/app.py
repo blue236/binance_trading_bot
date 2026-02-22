@@ -298,6 +298,9 @@ def _poll_server_telegram_commands() -> None:
 
         cfg = _load_main_cfg()
         state = _load_main_state(cfg)
+        owner_user_id = str((cfg.get("alerts") or {}).get("telegram_owner_user_id", "") or "").strip()
+        msg_user_id = str((msg.get("from") or {}).get("id", "") or "").strip()
+        owner_ok = bool(owner_user_id) and (msg_user_id == owner_user_id)
         parts = text.split()
         cmd = parts[0].lower() if parts else ""
 
@@ -315,6 +318,10 @@ def _poll_server_telegram_commands() -> None:
                 _notify_telegram("✅ AI bot already stopped.")
         elif cmd == "/status":
             _notify_telegram(_server_status_text())
+        elif cmd == "/summary":
+            _notify_telegram(_server_summary_text())
+        elif cmd == "/health":
+            _notify_telegram(_server_health_text())
         elif cmd == "/positions":
             positions = state.get("positions") or {}
             if not positions:
@@ -333,6 +340,21 @@ def _poll_server_telegram_commands() -> None:
                 f"max_concurrent_positions: {risk.get('max_concurrent_positions')}\n"
                 f"cooldown_hours: {risk.get('cooldown_hours')}"
             )
+        elif cmd == "/restart":
+            if not owner_ok:
+                _notify_telegram("Owner-only command.")
+                continue
+            token_c = f"r{int(time.time()) % 100000:05d}"
+            state["pending_change"] = {
+                "cmd": "restart",
+                "value": "now",
+                "token": token_c,
+                "requested_at": time.time(),
+                "expires_at": int(time.time()) + 120,
+                "user_id": msg_user_id,
+            }
+            _write_main_state(cfg, state)
+            _notify_telegram(f"Pending change: restart -> now\nReply /confirm {token_c} to apply (expires in 120s) or /cancel")
         elif cmd == "/setrisk":
             if len(parts) < 2:
                 _notify_telegram("Usage: /setrisk <percent>")
@@ -365,8 +387,26 @@ def _poll_server_telegram_commands() -> None:
             pending = state.get("pending_change") or {}
             pcmd = pending.get("cmd")
             pval = pending.get("value")
+            token_in = parts[1].strip().lower() if len(parts) >= 2 else ""
             if not pcmd:
                 _notify_telegram("No pending change.")
+            elif int(time.time()) > int(pending.get("expires_at", 2**31)):
+                state.pop("pending_change", None)
+                _write_main_state(cfg, state)
+                _notify_telegram("Pending change expired. Please request again.")
+            elif pcmd == "restart":
+                if not owner_ok:
+                    _notify_telegram("Owner-only command.")
+                    continue
+                if not token_in or token_in != str(pending.get("token", "")).lower() or msg_user_id != str(pending.get("user_id", "")):
+                    _notify_telegram("Invalid confirm token.")
+                    continue
+                state.pop("pending_change", None)
+                _write_main_state(cfg, state)
+                _notify_telegram("♻️ Restarting AI bot now...")
+                _stop_ai_bot()
+                time.sleep(1)
+                _start_ai_bot()
             elif pcmd == "setrisk":
                 old = (cfg.get("risk") or {}).get("per_trade_risk_pct")
                 cfg.setdefault("risk", {})["per_trade_risk_pct"] = float(pval)
@@ -396,7 +436,7 @@ def _poll_server_telegram_commands() -> None:
             _write_main_state(cfg, state)
             _notify_telegram("▶️ Bot resumed.")
         elif cmd == "/help":
-            _notify_telegram("Available commands: /status, /positions, /risk, /setrisk, /setmaxpos, /confirm, /cancel, /pause, /resume, /start, /stop, /help")
+            _notify_telegram("Available commands: /status, /summary, /health, /positions, /risk, /setrisk, /setmaxpos, /restart, /confirm, /cancel, /pause, /resume, /start, /stop, /help")
         elif text.startswith("approve ") or text.startswith("deny ") or text.startswith("/approve ") or text.startswith("/deny "):
             _append_inbox(chat_id, text)
 
@@ -467,6 +507,39 @@ def _server_status_text() -> str:
         f"open_positions: {len(positions)}\n"
         f"symbols: {', '.join(syms)}\n"
         f"risk: per_trade={risk.get('per_trade_risk_pct')}%, max_pos={risk.get('max_concurrent_positions')}"
+    )
+
+
+def _server_summary_text() -> str:
+    cfg = _load_main_cfg()
+    state = _load_main_state(cfg)
+    risk = cfg.get("risk") or {}
+    positions = state.get("positions") or {}
+    runtime_mode = state.get("runtime_mode", "aggressive" if (cfg.get("general") or {}).get("aggressive_mode") else "normal")
+    approval = bool((cfg.get("alerts") or {}).get("enable_trade_approval", False))
+    return (
+        "📌 Summary\n"
+        f"runtime_mode: {runtime_mode}\n"
+        f"approval: {'ON' if approval else 'OFF'}\n"
+        f"risk_pct: {risk.get('per_trade_risk_pct')}\n"
+        f"max_pos: {risk.get('max_concurrent_positions')}\n"
+        f"cooldown_h: {risk.get('cooldown_hours')}\n"
+        f"open_positions: {len(positions)}"
+    )
+
+
+def _server_health_text() -> str:
+    cfg = _load_main_cfg()
+    state = _load_main_state(cfg)
+    owner = str((cfg.get("alerts") or {}).get("telegram_owner_user_id", "") or "").strip()
+    pending = state.get("pending_change") or {}
+    return (
+        "🩺 Health\n"
+        f"ai_running: {'yes' if _is_ai_running() else 'no'}\n"
+        f"owner_configured: {'yes' if owner else 'no'}\n"
+        f"pending_change: {'yes' if bool(pending) else 'no'}\n"
+        f"state_file: {str(_main_state_path(cfg))}\n"
+        f"paused: {'yes' if bool(state.get('bot_paused', False)) else 'no'}"
     )
 
 
