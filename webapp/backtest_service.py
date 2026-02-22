@@ -4,6 +4,14 @@ import re
 import pandas as pd
 
 from .storage import Storage
+from .models import (
+    BacktestCurve,
+    BacktestMarker,
+    BacktestMetrics,
+    BacktestSummary,
+    UnifiedBacktestBundle,
+    UnifiedBacktestResult,
+)
 
 
 class BacktestService:
@@ -81,47 +89,91 @@ class BacktestService:
             "markers": markers,
         }
 
+    def _normalize_markers(self, markers: list | None) -> list[dict]:
+        normalized = []
+        for m in (markers or []):
+            try:
+                normalized.append(BacktestMarker(**m).model_dump())
+            except Exception:
+                continue
+        return normalized
+
+    def _normalize_curve(self, curve: dict | None) -> dict:
+        try:
+            return BacktestCurve(**(curve or {})).model_dump()
+        except Exception:
+            return BacktestCurve().model_dump()
+
+    def _normalize_metrics(self, metrics: dict | None) -> dict:
+        try:
+            return BacktestMetrics(**(metrics or {})).model_dump()
+        except Exception:
+            return BacktestMetrics().model_dump()
+
     def to_unified_quick(self, symbol: str, quick_result: dict) -> dict:
-        return {
-            "engine": "quick",
-            "summary": {
-                "symbol": symbol,
-                "status": "ok",
-                "signal_basis": "config.strategy ema_fast/ema_slow -> SMA crossover replay",
-            },
-            "metrics": {
-                "roi_pct": quick_result.get("roi_pct"),
-                "final_equity": quick_result.get("final_equity"),
-                "max_drawdown_pct": quick_result.get("max_drawdown_pct"),
-                "trades": quick_result.get("trades"),
-            },
-            "trades": [],
-            "equity_curve": quick_result.get("equity_curve") or {"labels": [], "values": []},
-            "markers": quick_result.get("markers") or [],
-        }
+        payload = UnifiedBacktestResult(
+            engine="quick",
+            summary=BacktestSummary(
+                symbol=symbol,
+                status="ok",
+                source="quick",
+                signal_basis="config.strategy ema_fast/ema_slow -> SMA crossover replay",
+            ),
+            metrics=BacktestMetrics(
+                roi_pct=quick_result.get("roi_pct"),
+                final_equity=quick_result.get("final_equity"),
+                max_drawdown_pct=quick_result.get("max_drawdown_pct"),
+                trades=quick_result.get("trades"),
+            ),
+            trades=[],
+            equity_curve=BacktestCurve(**(quick_result.get("equity_curve") or {})),
+            markers=[BacktestMarker(**m) for m in self._normalize_markers(quick_result.get("markers"))],
+        )
+        return payload.model_dump()
 
     def to_unified_legacy(self, symbol: str, legacy_output: str, returncode: int = 0) -> dict:
         roi = self._extract_float(legacy_output, r"ROI\s*[:=]\s*([-+]?\d+(?:\.\d+)?)")
         mdd = self._extract_float(legacy_output, r"(?:MDD|max[_\s-]?drawdown)\s*[:=]\s*([-+]?\d+(?:\.\d+)?)")
         trades = self._extract_int(legacy_output, r"trades?\s*[:=]\s*(\d+)")
 
-        return {
-            "engine": "legacy",
-            "summary": {
-                "symbol": symbol,
-                "status": "ok" if int(returncode) == 0 else "error",
-            },
-            "metrics": {
-                "roi_pct": roi,
-                "final_equity": None,
-                "max_drawdown_pct": mdd,
-                "trades": trades,
-            },
-            "trades": [],
-            "equity_curve": {"labels": [], "values": []},
-            "markers": [],
-            "raw_output": (legacy_output or "")[:8000],
-        }
+        payload = UnifiedBacktestResult(
+            engine="legacy",
+            summary=BacktestSummary(symbol=symbol, status="ok" if int(returncode) == 0 else "error", source="legacy"),
+            metrics=BacktestMetrics(
+                roi_pct=roi,
+                final_equity=None,
+                max_drawdown_pct=mdd,
+                trades=trades,
+            ),
+            trades=[],
+            equity_curve=BacktestCurve(),
+            markers=[],
+            raw_output=(legacy_output or "")[:8000],
+        )
+        return payload.model_dump()
+
+    def to_unified_both(self, symbol: str, quick_result: dict, legacy_output: str, legacy_returncode: int = 0) -> dict:
+        quick = self.to_unified_quick(symbol, quick_result)
+        legacy = self.to_unified_legacy(symbol, legacy_output, returncode=legacy_returncode)
+
+        merged = UnifiedBacktestBundle(
+            summary=BacktestSummary(
+                symbol=symbol,
+                status="ok" if quick["summary"]["status"] == "ok" and legacy["summary"]["status"] == "ok" else "error",
+                source="quick+legacy",
+                note="Merged view for convergence layer",
+            ),
+            metrics=BacktestMetrics(
+                roi_pct=quick.get("metrics", {}).get("roi_pct"),
+                final_equity=quick.get("metrics", {}).get("final_equity"),
+                max_drawdown_pct=legacy.get("metrics", {}).get("max_drawdown_pct"),
+                trades=quick.get("metrics", {}).get("trades"),
+            ),
+            markers=[BacktestMarker(**m) for m in self._normalize_markers(quick.get("markers"))],
+            quick=UnifiedBacktestResult(**quick),
+            legacy=UnifiedBacktestResult(**legacy),
+        )
+        return merged.model_dump()
 
     @staticmethod
     def _extract_float(text: str, pattern: str):
