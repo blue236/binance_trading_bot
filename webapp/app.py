@@ -611,6 +611,26 @@ def _clean_console_output(text: str) -> str:
     return "\n".join(lines).strip()
 
 
+def _error_response(code: str, message: str, status_code: int = 400):
+    return JSONResponse(status_code=status_code, content={"ok": False, "error": {"code": code, "message": message}})
+
+
+def _run_legacy_backtest(values: Dict):
+    cmd = legacy_build_command(values)
+    proc = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True)
+    raw_output = (proc.stdout or "")
+    if not raw_output.strip():
+        raw_output = proc.stderr or ""
+    output = _clean_console_output(raw_output)
+    plots = list_plot_files()
+    return {
+        "ok": proc.returncode == 0,
+        "returncode": proc.returncode,
+        "output": output,
+        "plots": plots,
+    }
+
+
 @app.on_event("startup")
 def startup():
     global scheduler
@@ -807,6 +827,51 @@ def ai_secrets_save(payload: Dict = Body(...)):
     return {"ok": True, "status": _secrets_status()}
 
 
+@app.post("/api/backtest/run")
+def run_backtest_unified(payload: Dict = Body(...)):
+    try:
+        cfg = config_mgr.load()
+        mode = str((payload or {}).get("mode", "quick")).strip().lower()
+        if mode not in ("quick", "legacy", "both"):
+            return _error_response("INVALID_MODE", "mode must be one of quick|legacy|both", 400)
+
+        symbol = str((payload or {}).get("symbol") or (cfg.symbols[0] if cfg.symbols else "BTC/USDT"))
+        timeframe = str((payload or {}).get("timeframe") or cfg.timeframe)
+        fast = int((payload or {}).get("fast_window", 20))
+        slow = int((payload or {}).get("slow_window", 60))
+        starting_capital = float((payload or {}).get("starting_capital", cfg.starting_capital))
+        fee_rate = float((payload or {}).get("fee_rate", cfg.fee_rate))
+
+        results = []
+        if mode in ("quick", "both"):
+            quick_raw = backtest_service.run_sma_crossover(symbol, timeframe, fast, slow, starting_capital, fee_rate)
+            results.append(backtest_service.to_unified_quick(symbol, quick_raw))
+
+        if mode in ("legacy", "both"):
+            values = dict(LEGACY_BT_DEFAULTS)
+            values["symbols"] = symbol
+            values["timeframe"] = timeframe
+            if "legacy" in payload and isinstance(payload.get("legacy"), dict):
+                for k, v in payload.get("legacy", {}).items():
+                    if k in LEGACY_BT_DEFAULTS and v is not None:
+                        values[k] = str(v)
+            errors = legacy_validate_values(values)
+            if errors:
+                return _error_response("LEGACY_VALIDATION_ERROR", "; ".join(errors), 400)
+            legacy_raw = _run_legacy_backtest(values)
+            results.append(backtest_service.to_unified_legacy(symbol, legacy_raw.get("output", ""), legacy_raw.get("returncode", 1)))
+
+        return {
+            "ok": True,
+            "mode": mode,
+            "results": results,
+        }
+    except ValueError as e:
+        return _error_response("VALIDATION_ERROR", str(e), 400)
+    except Exception as e:
+        return _error_response("BACKTEST_RUN_FAILED", str(e), 500)
+
+
 @app.post("/api/legacy/backtester/run")
 def run_legacy_backtester(payload: Dict = Body(...)):
     values = dict(LEGACY_BT_DEFAULTS)
@@ -818,19 +883,7 @@ def run_legacy_backtester(payload: Dict = Body(...)):
     if errors:
         return {"ok": False, "errors": errors}
 
-    cmd = legacy_build_command(values)
-    proc = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True)
-    raw_output = (proc.stdout or "")
-    if not raw_output.strip():
-        raw_output = proc.stderr or ""
-    output = _clean_console_output(raw_output)
-    plots = list_plot_files()
-    return {
-        "ok": proc.returncode == 0,
-        "returncode": proc.returncode,
-        "output": output,
-        "plots": plots,
-    }
+    return _run_legacy_backtest(values)
 
 
 @app.get("/api/health")

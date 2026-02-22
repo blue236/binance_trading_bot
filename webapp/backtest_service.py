@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import pandas as pd
 
 from .storage import Storage
@@ -25,6 +26,7 @@ class BacktestService:
         trades = 0
 
         for _, r in df.iterrows():
+            ts = int(r["ts"])
             price = float(r["close"])
             signal_buy = r["fast"] > r["slow"]
             if signal_buy and qty == 0.0:
@@ -36,7 +38,7 @@ class BacktestService:
                 qty = 0.0
                 trades += 1
             equity = cash + qty * price
-            equity_curve.append((int(r["ts"]), float(equity), price))
+            equity_curve.append((ts, float(equity), price))
 
         if qty > 0.0:
             last_price = float(df.iloc[-1]["close"])
@@ -62,3 +64,66 @@ class BacktestService:
             "equity_curve": {"labels": labels, "values": values},
             "price_curve": {"labels": labels, "values": prices},
         }
+
+    def to_unified_quick(self, symbol: str, quick_result: dict) -> dict:
+        return {
+            "engine": "quick",
+            "summary": {
+                "symbol": symbol,
+                "status": "ok",
+            },
+            "metrics": {
+                "roi_pct": quick_result.get("roi_pct"),
+                "final_equity": quick_result.get("final_equity"),
+                "max_drawdown_pct": quick_result.get("max_drawdown_pct"),
+                "trades": quick_result.get("trades"),
+            },
+            "trades": [],
+            "equity_curve": quick_result.get("equity_curve") or {"labels": [], "values": []},
+        }
+
+    def to_unified_legacy(self, symbol: str, legacy_output: str, returncode: int = 0) -> dict:
+        roi = self._extract_float(legacy_output, r"ROI\s*[:=]\s*([-+]?\d+(?:\.\d+)?)")
+        mdd = self._extract_float(legacy_output, r"(?:MDD|max[_\s-]?drawdown)\s*[:=]\s*([-+]?\d+(?:\.\d+)?)")
+        trades = self._extract_int(legacy_output, r"trades?\s*[:=]\s*(\d+)")
+
+        return {
+            "engine": "legacy",
+            "summary": {
+                "symbol": symbol,
+                "status": "ok" if int(returncode) == 0 else "error",
+            },
+            "metrics": {
+                "roi_pct": roi,
+                "final_equity": None,
+                "max_drawdown_pct": mdd,
+                "trades": trades,
+            },
+            "trades": [],
+            "equity_curve": {"labels": [], "values": []},
+            "raw_output": (legacy_output or "")[:8000],
+        }
+
+    @staticmethod
+    def _extract_float(text: str, pattern: str):
+        if not text:
+            return None
+        m = re.search(pattern, text, flags=re.IGNORECASE)
+        if not m:
+            return None
+        try:
+            return float(m.group(1))
+        except Exception:
+            return None
+
+    @staticmethod
+    def _extract_int(text: str, pattern: str):
+        if not text:
+            return None
+        m = re.search(pattern, text, flags=re.IGNORECASE)
+        if not m:
+            return None
+        try:
+            return int(m.group(1))
+        except Exception:
+            return None
