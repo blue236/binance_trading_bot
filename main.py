@@ -298,6 +298,18 @@ def _risk_text(cfg):
     )
 
 
+def _telegram_owner_id(cfg):
+    return str((cfg.get("alerts", {}) or {}).get("telegram_owner_user_id", "")).strip()
+
+
+def _is_owner_message(cfg, msg):
+    owner = _telegram_owner_id(cfg)
+    uid = str((msg.get("from") or {}).get("id", "")).strip()
+    if not owner:
+        return False
+    return uid == owner
+
+
 def _build_confirm_text(pending):
     if not pending:
         return "No pending change."
@@ -333,6 +345,7 @@ def poll_telegram_commands(tg, offset, cfg, state, equity_now, base_ccy, state_p
         cmd = txt.lower()
         parts = txt.split()
         root = (parts[0].lower() if parts else "")
+        owner_ok = _is_owner_message(cfg, msg)
         pending = state.get("pending_change") or {}
         if pending and int(time.time()) > int(pending.get("expires_at", 0)):
             audit_log(cfg["logging"]["csv_dir"], "COMMAND_EXPIRED", {"cmd": pending.get("cmd"), "token": pending.get("token")})
@@ -342,8 +355,14 @@ def poll_telegram_commands(tg, offset, cfg, state, equity_now, base_ccy, state_p
         if cmd in ("/status", "status"):
             send_telegram(tg, _status_text(cfg, state, equity_now, base_ccy))
         elif cmd in ("/start", "start"):
+            if not owner_ok:
+                send_telegram(tg, "Owner-only command.")
+                continue
             send_telegram(tg, "✅ AI bot already running.")
         elif cmd in ("/stop", "stop"):
+            if not owner_ok:
+                send_telegram(tg, "Owner-only command.")
+                continue
             send_telegram(tg, "🛑 Stopping AI bot by Telegram command.")
             raise SystemExit(0)
         elif cmd in ("/positions", "positions"):
@@ -357,7 +376,53 @@ def poll_telegram_commands(tg, offset, cfg, state, equity_now, base_ccy, state_p
                 send_telegram(tg, "\n".join(lines)[:3900])
         elif cmd in ("/risk", "risk"):
             send_telegram(tg, _risk_text(cfg))
+        elif cmd in ("/summary", "summary"):
+            positions = state.get("positions", {}) if isinstance(state, dict) else {}
+            runtime_mode = state.get("runtime_mode", "aggressive" if cfg.get("general", {}).get("aggressive_mode") else "normal")
+            approval = bool(cfg.get("alerts", {}).get("enable_trade_approval", False))
+            send_telegram(tg, (
+                "📌 Summary\n"
+                f"runtime_mode: {runtime_mode}\n"
+                f"approval: {'ON' if approval else 'OFF'}\n"
+                f"risk_pct: {cfg.get('risk', {}).get('per_trade_risk_pct')}\n"
+                f"max_pos: {cfg.get('risk', {}).get('max_concurrent_positions')}\n"
+                f"cooldown_h: {cfg.get('risk', {}).get('cooldown_hours')}\n"
+                f"open_positions: {len(positions)}\n"
+                f"equity: {float(equity_now):.2f} {base_ccy}"
+            ))
+        elif cmd in ("/health", "health"):
+            owner = _telegram_owner_id(cfg)
+            health_text = (
+                "🩺 Health\n"
+                f"loop_alive: yes\n"
+                f"owner_configured: {'yes' if owner else 'no'}\n"
+                f"pending_change: {bool(state.get('pending_change'))}\n"
+                f"positions: {len(state.get('positions', {}))}\n"
+                f"paused: {bool(state.get('bot_paused', False))}"
+            )
+            send_telegram(tg, health_text)
+        elif root in ("/restart", "restart"):
+            if not owner_ok:
+                audit_log(cfg["logging"]["csv_dir"], "COMMAND_DENIED", {"cmd": "restart", "reason": "owner_only", "user_id": str(msg.get("from", {}).get("id", ""))})
+                send_telegram(tg, "Owner-only command.")
+                continue
+            token = secrets.token_hex(3)
+            state["pending_change"] = {
+                "cmd": "restart", "value": "now", "token": token,
+                "requested_at": now_tz(cfg["logging"]["tz"]).isoformat(),
+                "expires_at": int(time.time()) + 120,
+                "user_id": str(msg.get("from", {}).get("id", "")),
+                "username": str(msg.get("from", {}).get("username", "")),
+                "chat_id": c,
+            }
+            write_state(state_path, state)
+            audit_log(cfg["logging"]["csv_dir"], "COMMAND_CONFIRM_ISSUED", {"cmd": "restart", "token": token, "user_id": state["pending_change"]["user_id"]})
+            send_telegram(tg, _build_confirm_text(state["pending_change"]))
         elif root in ("/setrisk", "setrisk"):
+            if not owner_ok:
+                audit_log(cfg["logging"]["csv_dir"], "COMMAND_DENIED", {"cmd": "setrisk", "reason": "owner_only", "user_id": str(msg.get("from", {}).get("id", ""))})
+                send_telegram(tg, "Owner-only command.")
+                continue
             if len(parts) < 2:
                 send_telegram(tg, "Usage: /setrisk <percent> (e.g. /setrisk 0.4)")
                 continue
@@ -382,6 +447,10 @@ def poll_telegram_commands(tg, offset, cfg, state, equity_now, base_ccy, state_p
             audit_log(cfg["logging"]["csv_dir"], "COMMAND_CONFIRM_ISSUED", {"cmd": "setrisk", "value": v, "token": token, "user_id": state["pending_change"]["user_id"]})
             send_telegram(tg, _build_confirm_text(state["pending_change"]))
         elif root in ("/setmaxpos", "setmaxpos"):
+            if not owner_ok:
+                audit_log(cfg["logging"]["csv_dir"], "COMMAND_DENIED", {"cmd": "setmaxpos", "reason": "owner_only", "user_id": str(msg.get("from", {}).get("id", ""))})
+                send_telegram(tg, "Owner-only command.")
+                continue
             if len(parts) < 2:
                 send_telegram(tg, "Usage: /setmaxpos <n> (e.g. /setmaxpos 2)")
                 continue
@@ -406,6 +475,10 @@ def poll_telegram_commands(tg, offset, cfg, state, equity_now, base_ccy, state_p
             audit_log(cfg["logging"]["csv_dir"], "COMMAND_CONFIRM_ISSUED", {"cmd": "setmaxpos", "value": v, "token": token, "user_id": state["pending_change"]["user_id"]})
             send_telegram(tg, _build_confirm_text(state["pending_change"]))
         elif root in ("/setcooldown", "setcooldown"):
+            if not owner_ok:
+                audit_log(cfg["logging"]["csv_dir"], "COMMAND_DENIED", {"cmd": "setcooldown", "reason": "owner_only", "user_id": str(msg.get("from", {}).get("id", ""))})
+                send_telegram(tg, "Owner-only command.")
+                continue
             if len(parts) < 2:
                 send_telegram(tg, "Usage: /setcooldown <hours> (e.g. /setcooldown 8)")
                 continue
@@ -430,6 +503,10 @@ def poll_telegram_commands(tg, offset, cfg, state, equity_now, base_ccy, state_p
             audit_log(cfg["logging"]["csv_dir"], "COMMAND_CONFIRM_ISSUED", {"cmd": "setcooldown", "value": v, "token": token, "user_id": state["pending_change"]["user_id"]})
             send_telegram(tg, _build_confirm_text(state["pending_change"]))
         elif root in ("/mode", "mode"):
+            if not owner_ok:
+                audit_log(cfg["logging"]["csv_dir"], "COMMAND_DENIED", {"cmd": "mode", "reason": "owner_only", "user_id": str(msg.get("from", {}).get("id", ""))})
+                send_telegram(tg, "Owner-only command.")
+                continue
             if len(parts) < 2:
                 send_telegram(tg, "Usage: /mode <safe|normal|aggressive>")
                 continue
@@ -540,6 +617,12 @@ def poll_telegram_commands(tg, offset, cfg, state, equity_now, base_ccy, state_p
                 logging.getLogger("bot").info("CMD mode applied: %s -> %s", old_mode, mode)
                 audit_log(cfg["logging"]["csv_dir"], "COMMAND_APPLIED", {"cmd": "mode", "before": old_mode, "after": mode})
                 send_telegram(tg, f"✅ mode updated: {old_mode} -> {mode}")
+            elif pcmd == "restart":
+                audit_log(cfg["logging"]["csv_dir"], "COMMAND_APPLIED", {"cmd": "restart", "user_id": cur_user})
+                send_telegram(tg, "♻️ Restarting bot process...")
+                state.pop("pending_change", None)
+                write_state(state_path, state)
+                os.execv(sys.executable, [sys.executable] + sys.argv)
             state.pop("pending_change", None)
             write_state(state_path, state)
         elif cmd in ("/cancel", "cancel"):
@@ -555,17 +638,23 @@ def poll_telegram_commands(tg, offset, cfg, state, equity_now, base_ccy, state_p
             audit_log(cfg["logging"]["csv_dir"], "COMMAND_CANCELLED", {"cmd": pending.get("cmd"), "user_id": cur_user})
             send_telegram(tg, "Cancelled pending change.")
         elif cmd in ("/pause", "pause"):
+            if not owner_ok:
+                send_telegram(tg, "Owner-only command.")
+                continue
             if not state.get("bot_paused", False):
                 state["bot_paused"] = True
                 write_state(state_path, state)
             send_telegram(tg, "⏸ Bot is now PAUSED. Monitoring and Telegram commands stay active.")
         elif cmd in ("/resume", "resume"):
+            if not owner_ok:
+                send_telegram(tg, "Owner-only command.")
+                continue
             if state.get("bot_paused", False):
                 state["bot_paused"] = False
                 write_state(state_path, state)
             send_telegram(tg, "▶️ Bot resumed.")
         elif cmd in ("/help", "help"):
-            send_telegram(tg, "Available commands: /status, /positions, /risk, /setrisk, /setmaxpos, /setcooldown, /mode, /confirm, /cancel, /pause, /resume, /start, /stop, /help")
+            send_telegram(tg, "Available commands: /status, /positions, /risk, /summary, /health, /setrisk, /setmaxpos, /setcooldown, /mode, /restart, /confirm <token>, /cancel, /pause, /resume, /start, /stop, /help (owner-only for state-changing commands)")
 
     return offset
 
