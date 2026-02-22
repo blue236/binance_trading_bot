@@ -9,6 +9,7 @@ import json
 import urllib.parse
 import urllib.request
 import time
+import datetime as dt
 from pathlib import Path
 from typing import Dict
 
@@ -148,6 +149,52 @@ def _stop_ai_bot() -> None:
             AI_PID_FILE.unlink()
         except Exception:
             pass
+
+
+def _wait_ai_stopped(timeout_sec: float = 6.0) -> bool:
+    end = time.time() + max(0.5, timeout_sec)
+    while time.time() < end:
+        if not _is_ai_running():
+            return True
+        time.sleep(0.2)
+    return not _is_ai_running()
+
+
+def _create_new_ai_log() -> dict:
+    path = _ai_log_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    was_running = _is_ai_running()
+    if was_running:
+        _stop_ai_bot()
+        if not _wait_ai_stopped(6.0):
+            return {"ok": False, "error": "failed to stop AI bot for log rotation"}
+
+    backup_path: Path | None = None
+    try:
+        if path.exists() and path.stat().st_size > 0:
+            stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+            candidate = path.with_name(f"{path.stem}-{stamp}{path.suffix}.bak")
+            i = 1
+            while candidate.exists():
+                candidate = path.with_name(f"{path.stem}-{stamp}-{i}{path.suffix}.bak")
+                i += 1
+            path.replace(candidate)
+            backup_path = candidate
+
+        path.write_text("")
+    except Exception as e:
+        return {"ok": False, "error": f"log rotate failed: {e}"}
+    finally:
+        if was_running:
+            _start_ai_bot()
+
+    return {
+        "ok": True,
+        "backup": str(backup_path) if backup_path else None,
+        "running": _is_ai_running(),
+        "log_tail": _tail_text(path, 10),
+    }
 
 
 def _load_ai_config_text() -> str:
@@ -727,6 +774,11 @@ def ai_logs_download():
     if not path.exists():
         return {"ok": False, "error": "log file not found"}
     return FileResponse(path=str(path), media_type="text/plain", filename="ai_bot.log")
+
+
+@app.post("/api/ai/logs/new")
+def ai_logs_new():
+    return _create_new_ai_log()
 
 
 @app.get("/api/ai/config")

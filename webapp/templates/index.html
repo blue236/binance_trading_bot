@@ -50,6 +50,7 @@
       <button id="aiStart">Start Bot</button>
       <button id="aiStop">Stop Bot</button>
       <button id="aiLogRefresh">Refresh Logs</button>
+      <button id="aiLogNew">New Log</button>
       <button id="aiLogDownload">Download Log</button>
       <label>Lines</label>
       <select id="aiLogLines">
@@ -65,7 +66,7 @@
     <div class="card">
       <h3>AI bot logs (scrollable history)</h3>
       <pre id="aiLog" style="max-height:320px; overflow:auto;">(loading...)</pre>
-      <span class="muted">Tip: increase line count to see older history.</span>
+      <span class="muted">Tip: New Log backs up current log to a timestamped .bak file and starts fresh logging.</span>
     </div>
 
     <div class="card row">
@@ -205,6 +206,23 @@
     await refreshAiLogs();
   }
 
+  async function aiLogNew(){
+    if(!confirm('Create a new AI log? Current log will be backed up to a .bak file.')) return;
+    const r=await fetch('/api/ai/logs/new',{method:'POST'});
+    const j=await r.json();
+    if(!j.ok){
+      alert('Failed to create new log: ' + (j.error || 'unknown error'));
+      return;
+    }
+    document.getElementById('aiStatus').textContent=j.running?'RUNNING':'STOPPED';
+    await refreshAiLogs();
+    if(j.backup){
+      alert('New log started. Backup created:\n' + j.backup);
+    } else {
+      alert('New empty log started.');
+    }
+  }
+
   async function loadConfig(){
     const r=await fetch('/api/config/load',{method:'POST'});
     const j=await r.json();
@@ -309,6 +327,7 @@
   document.getElementById('aiStart').onclick=aiStart;
   document.getElementById('aiStop').onclick=aiStop;
   document.getElementById('aiLogRefresh').onclick=()=>refreshAiLogs();
+  document.getElementById('aiLogNew').onclick=aiLogNew;
   document.getElementById('aiLogDownload').onclick=()=>{ window.location.href='/api/ai/logs/download'; };
   document.getElementById('aiLogLines').onchange=()=>refreshAiLogs();
   document.getElementById('aiCfgReload').onclick=reloadAiCfg;
