@@ -504,14 +504,34 @@ def _ai_state_path() -> Path:
 
 def _ai_network_health() -> dict:
     path = _ai_state_path()
+    base = {
+        "failures": 0,
+        "last_error": "",
+        "last_ok_at": None,
+        "label": "unknown",
+    }
     if not path.exists():
-        return {"available": False}
+        return {**base, "label": "no_state"}
     try:
         s = json.loads(path.read_text())
         net = ((s.get("runtime_health") or {}).get("network") or {}) if isinstance(s, dict) else {}
-        return {"available": True, **net}
+        failures = int(net.get("failures", 0) or 0)
+        last_error = str(net.get("last_error", "") or "")
+        last_ok_at = net.get("last_ok_at")
+        if failures <= 0 and not last_error:
+            label = "ok"
+        elif failures < 3:
+            label = "degraded"
+        else:
+            label = "down"
+        return {
+            "failures": failures,
+            "last_error": last_error,
+            "last_ok_at": last_ok_at,
+            "label": label,
+        }
     except Exception as e:
-        return {"available": False, "error": str(e)}
+        return {**base, "label": "parse_error", "last_error": str(e)}
 
 
 def _ai_log_path() -> Path:
@@ -792,6 +812,20 @@ def ai_status():
         "running": _is_ai_running(),
         "log_tail": _tail_text(_ai_log_path(), 10),
         "network_health": _ai_network_health(),
+    }
+
+
+@app.get("/api/system/health")
+def system_health():
+    cfg = _load_main_cfg()
+    state = _load_main_state(cfg)
+    return {
+        "ok": True,
+        "ai_running": _is_ai_running(),
+        "last_loop_ts": state.get("last_loop_ts") or state.get("last_tick_ts") or state.get("updated_at"),
+        "network_health": _ai_network_health(),
+        "pending_change": state.get("pending_change") or {},
+        "auth_enabled": _auth_enabled(),
     }
 
 
