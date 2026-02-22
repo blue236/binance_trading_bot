@@ -962,6 +962,36 @@ def _update_network_health_state(state):
     }
 
 
+def evaluate_pretrade_risk_gate(cfg, state, symbol, now, equity_now, equity_start):
+    positions = state.get("positions", {}) if isinstance(state, dict) else {}
+    max_pos = int(cfg.get("risk", {}).get("max_concurrent_positions", 0) or 0)
+    if bool(state.get("bot_paused", False)):
+        return False, "bot_paused"
+    if max_pos > 0 and len(positions) >= max_pos:
+        return False, "max_concurrent_positions"
+    if daily_pnl_guard(cfg, equity_now, equity_start):
+        return False, "daily_loss_stop"
+    if symbol in positions:
+        return False, "already_in_position"
+    if is_cooldown(state, symbol, cfg, now):
+        return False, "cooldown_active"
+    return True, "ok"
+
+
+def _record_risk_gate_reject(cfg, csv_dir, loop_ts, symbol, reason, logger=None):
+    payload = {"scope": "pretrade", "symbol": symbol, "reason": reason}
+    audit_log(cfg["logging"]["csv_dir"], "RISK_GATE_REJECT", payload)
+    log_csv(csv_dir, "trades", {
+        "ts": loop_ts.isoformat(),
+        "event": "RISK_GATE_REJECT",
+        "symbol": symbol,
+        "side": "BUY",
+        "reason": reason,
+    }, fieldnames=TRADE_FIELDS)
+    if logger:
+        logger.info("Risk gate reject: symbol=%s reason=%s", symbol, reason)
+
+
 def daily_pnl_guard(cfg, equity_now, equity_start):
     if equity_start <= 0:
         return False
@@ -1087,18 +1117,17 @@ def main():
                 time.sleep(sleep_sec)
                 continue
 
-            # entry checks
+            # entry checks (mandatory pre-trade risk gate)
             allow_entries = len(state["positions"]) < cfg["risk"]["max_concurrent_positions"]
             free_base = balances_free.get(base_ccy, 0.0)
             logger.debug("Entry check: allow_entries=%s free_base=%.6f", allow_entries, float(free_base))
             for symbol in symbols:
-                if not allow_entries:
-                    break
-                if symbol in state["positions"]:
-                    logger.debug("Skip %s: already in position", symbol)
-                    continue
-                if is_cooldown(state, symbol, cfg, loop_ts):
-                    logger.debug("Skip %s: cooldown active", symbol)
+                gate_ok, gate_reason = evaluate_pretrade_risk_gate(cfg, state, symbol, loop_ts, equity_now, equity_start)
+                if not gate_ok:
+                    if gate_reason in ("max_concurrent_positions", "daily_loss_stop", "bot_paused"):
+                        _record_risk_gate_reject(cfg, csv_dir, loop_ts, symbol, gate_reason, logger=logger)
+                        break
+                    _record_risk_gate_reject(cfg, csv_dir, loop_ts, symbol, gate_reason, logger=logger)
                     continue
                 regime, adx_val = regime_filter(exchange, symbol, cfg)
                 if regime == "none":
