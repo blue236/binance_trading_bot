@@ -7,7 +7,7 @@ general:
   timeframe_regime: 1d
   exchange: binance
   dry_run: true
-  aggressive_mode: ture
+  aggressive_mode: true
   base_currency: USDC
   min_notional_usdc: 10.0
 risk:
