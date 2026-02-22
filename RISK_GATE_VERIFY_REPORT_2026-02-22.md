@@ -2,22 +2,23 @@
 
 - Script: `scripts/risk_gate_check.sh`
 - Log: `logs/risk_gate_2026-02-22.log`
-- Executed at: 2026-02-22T18:51:24+01:00
+- Executed at: 2026-02-22T19:24:11+01:00
 
 ## Scope
-1. Max position 초과 시 신규 진입 차단
-2. pause 상태에서 진입 차단
-3. owner-only 명령(/setrisk) 비소유자 차단
+1. Mandatory pre-trade risk gate presence/usage
+2. Reject audit logging consistency
+3. owner-only command(/setrisk) non-owner block
 
 ## Execution Log
 ```text
-[risk-gate] started: 2026-02-22T18:51:24+01:00
+[risk-gate] started: 2026-02-22T19:24:10+01:00
 [risk-gate] root: /home/blue236/.openclaw/workspace/binance_trading_bot
-[PASS] Pause guard exists before entry checks :: pause_idx=32812, entry_idx=47244, continue_idx=38122
-[PASS] Max position gate exists (allow_entries + break) :: allow_idx=47271, break_idx=47567
+[PASS] Mandatory pre-trade risk gate function exists :: fn_idx=41661
+[PASS] Entry loop evaluates risk gate before entry :: entry_idx=48786, call_idx=48848
+[PASS] Risk-gate reject audit event exists :: reject_idx=42553
 [PASS] Owner-only command denies non-owner /setrisk :: Owner-only command.
 [PASS] Non-owner /setrisk does not create pending change :: None
-TOTAL: pass=4, fail=0
+TOTAL: pass=5, fail=0
 RESULT: PASS
 [risk-gate] checks: PASS
 ```
@@ -26,4 +27,4 @@ RESULT: PASS
 - Result: **PASS**
 
 ## Remaining Risks
-- max position/pause는 소스 가드+흐름 검증 중심이며, 거래소 연동 포함 E2E는 별도 필요
+- 실거래소 연동 E2E(네트워크/슬리피지 포함)는 별도 시나리오로 추가 검증 필요

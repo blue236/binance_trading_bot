@@ -1,0 +1,43 @@
+version: 1
+name: controlled-launch-policy
+
+capital_ramp:
+  - stage: S1
+    allocation_pct: 5
+    min_runtime_hours: 24
+    pass_criteria:
+      max_drawdown_pct: 1.5
+      order_reject_rate_pct: 2.0
+      network_error_events: 5
+  - stage: S2
+    allocation_pct: 10
+    min_runtime_hours: 48
+    pass_criteria:
+      max_drawdown_pct: 2.0
+      order_reject_rate_pct: 2.5
+      network_error_events: 8
+  - stage: S3
+    allocation_pct: 20
+    min_runtime_hours: 72
+    pass_criteria:
+      max_drawdown_pct: 2.5
+      order_reject_rate_pct: 3.0
+      network_error_events: 10
+
+hard_stop:
+  daily_loss_stop_pct: 2.0
+  consecutive_network_failures: 3
+  manual_kill_switch_commands:
+    - /pause
+    - /stop
+
+rollback:
+  triggers:
+    - unexpected_api_error_spike
+    - repeated_order_rejects
+    - stale_market_data
+  immediate_actions:
+    - /pause
+    - collect logs (bot.log, audit.log, release/risk/m5/m6 reports)
+    - revert to previous known-good commit
+    - run scripts/release_gate.sh --with-risk before resume

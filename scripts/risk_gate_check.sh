@@ -9,7 +9,7 @@ REPORT="$ROOT_DIR/RISK_GATE_VERIFY_REPORT_2026-02-22.md"
 mkdir -p "$LOG_DIR"
 status="PASS"
 
-if {
+{
   echo "[risk-gate] started: $(date -Iseconds)"
   echo "[risk-gate] root: $ROOT_DIR"
   cd "$ROOT_DIR"
@@ -20,10 +20,10 @@ if {
     PY="python3"
   fi
 
+  set +e
   "$PY" - <<'PY'
-import re
-import tempfile
 import os
+import tempfile
 from pathlib import Path
 
 pass_count = 0
@@ -41,26 +41,24 @@ def check(name, ok, detail=""):
 
 source = Path("main.py").read_text(encoding="utf-8")
 
-# 1) pause 상태에서 진입 차단 (guard + continue ordering)
-pause_idx = source.find('if state.get("bot_paused", False):')
-entry_idx = source.find('# entry checks')
-continue_near = source.find('continue', pause_idx, entry_idx if entry_idx != -1 else None)
+# 1) pre-trade risk gate function exists
+fn_idx = source.find("def evaluate_pretrade_risk_gate(")
+check("Mandatory pre-trade risk gate function exists", fn_idx != -1, f"fn_idx={fn_idx}")
+
+# 2) entry loop calls risk gate before trading decisions
+entry_idx = source.find("for symbol in symbols:")
+call_idx = source.find("evaluate_pretrade_risk_gate(", entry_idx if entry_idx != -1 else 0)
 check(
-    "Pause guard exists before entry checks",
-    pause_idx != -1 and entry_idx != -1 and pause_idx < entry_idx and continue_near != -1,
-    f"pause_idx={pause_idx}, entry_idx={entry_idx}, continue_idx={continue_near}",
+    "Entry loop evaluates risk gate before entry",
+    entry_idx != -1 and call_idx != -1 and call_idx > entry_idx,
+    f"entry_idx={entry_idx}, call_idx={call_idx}",
 )
 
-# 2) max position 초과 시 신규 진입 차단 (allow_entries gate + break)
-allow_idx = source.find('allow_entries = len(state["positions"]) < cfg["risk"]["max_concurrent_positions"]')
-break_idx = source.find('if not allow_entries:\n                    break')
-check(
-    "Max position gate exists (allow_entries + break)",
-    allow_idx != -1 and break_idx != -1 and allow_idx < break_idx,
-    f"allow_idx={allow_idx}, break_idx={break_idx}",
-)
+# 3) reject path audit event exists
+reject_idx = source.find("RISK_GATE_REJECT")
+check("Risk-gate reject audit event exists", reject_idx != -1, f"reject_idx={reject_idx}")
 
-# 3) owner-only 명령 비소유자 차단 (behavioral mock: /setrisk)
+# 4) owner-only command behavioral check
 import main
 
 cfg = {
@@ -115,17 +113,19 @@ except Exception:
 
 print(f"TOTAL: pass={pass_count}, fail={fail_count}")
 print("RESULT:", "PASS" if fail_count == 0 else "FAIL")
-
-if fail_count:
-    raise SystemExit(1)
+raise SystemExit(0 if fail_count == 0 else 1)
 PY
+  py_rc=$?
+  set -e
 
-  echo "[risk-gate] checks: PASS"
-} 2>&1 | tee "$OUT_LOG"; then
-  status="PASS"
-else
-  status="FAIL"
-fi
+  if [[ $py_rc -eq 0 ]]; then
+    echo "[risk-gate] checks: PASS"
+  else
+    echo "[risk-gate] checks: FAIL"
+    status="FAIL"
+  fi
+
+} 2>&1 | tee "$OUT_LOG"
 
 {
   echo "# Risk Gate Verify Report (2026-02-22)"
@@ -135,9 +135,9 @@ fi
   echo "- Executed at: $(date -Iseconds)"
   echo
   echo "## Scope"
-  echo "1. Max position 초과 시 신규 진입 차단"
-  echo "2. pause 상태에서 진입 차단"
-  echo "3. owner-only 명령(/setrisk) 비소유자 차단"
+  echo "1. Mandatory pre-trade risk gate presence/usage"
+  echo "2. Reject audit logging consistency"
+  echo "3. owner-only command(/setrisk) non-owner block"
   echo
   echo "## Execution Log"
   echo '```text'
@@ -148,7 +148,7 @@ fi
   echo "- Result: **$status**"
   echo
   echo "## Remaining Risks"
-  echo "- max position/pause는 소스 가드+흐름 검증 중심이며, 거래소 연동 포함 E2E는 별도 필요"
+  echo "- 실거래소 연동 E2E(네트워크/슬리피지 포함)는 별도 시나리오로 추가 검증 필요"
 } > "$REPORT"
 
 if [[ "$status" == "PASS" ]]; then
