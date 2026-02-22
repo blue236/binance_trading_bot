@@ -23,7 +23,11 @@
     .kpi-item{background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:8px}
     .table-wrap{overflow:auto}
     table{width:100%;border-collapse:collapse}
-    th,td{border-bottom:1px solid #e5e7eb;padding:8px;text-align:left;font-size:14px}
+    th,td{border-bottom:1px solid #e5e7eb;padding:8px;text-align:left;font-size:14px;white-space:nowrap}
+    th.sortable{cursor:pointer;user-select:none}
+    .best{background:#ecfdf5}
+    .worst{background:#fef2f2}
+    .marker-tooltip{position:absolute;pointer-events:none;background:#111;color:#fff;padding:8px 10px;border-radius:8px;font-size:12px;display:none;z-index:50;max-width:220px}
     img.plot{max-width:280px;border:1px solid #ddd;border-radius:8px;margin:6px}
     @media (max-width: 768px){
       body{margin:10px}
@@ -34,6 +38,7 @@
       .row{flex-direction:column;align-items:stretch}
       .row label{font-size:.9rem;color:#444}
       input,select,button{width:100%}
+      .card .row button{margin-top:4px}
       #cfgSymbols{width:100% !important}
       #aiLog,#legacyOut,#btOut{max-height:220px}
       #priceChart,#btUnifiedChart{max-height:280px}
@@ -132,8 +137,8 @@
       <div class="kpi-grid" id="btKpiGrid"></div>
       <div class="table-wrap" style="margin-top:10px;">
         <table>
-          <thead><tr><th>Engine</th><th>ROI%</th><th>MDD%</th><th>Trades</th><th>Final Equity</th><th>Status</th></tr></thead>
-          <tbody id="btCompareBody"><tr><td colspan="6" class="muted">(no results)</td></tr></tbody>
+          <thead><tr><th>Engine</th><th class="sortable" data-sort="win_rate">WinRate ↕</th><th class="sortable" data-sort="roi_pct">ROI% ↕</th><th class="sortable" data-sort="max_drawdown_pct">MDD% ↕</th><th>Trades</th><th>Final Equity</th><th>Status</th></tr></thead>
+          <tbody id="btCompareBody"><tr><td colspan="7" class="muted">(no results)</td></tr></tbody>
         </table>
       </div>
       <pre id="btOut">(no results)</pre>
@@ -142,6 +147,7 @@
     <div class="card">
       <h3>Backtest Chart (marker overlay: BUY/SELL)</h3>
       <canvas id="btUnifiedChart" height="110"></canvas>
+      <div id="btMarkerTooltip" class="marker-tooltip"></div>
       <div class="muted" id="btMarkerStatus">Markers: (none)</div>
     </div>
 
@@ -306,6 +312,8 @@
   }
 
   let btChart;
+  let btLastResults = [];
+  let btSortState = { key: 'roi_pct', dir: 'desc' };
 
   function markerPlugin(markers){
     return {
@@ -317,6 +325,7 @@
         markers.forEach(m=>{
           const px=x.getPixelForValue(m.index);
           const py=y.getPixelForValue(m.price);
+          m._px = px; m._py = py;
           ctx.fillStyle = m.side==='BUY' ? '#16a34a' : '#dc2626';
           ctx.beginPath();
           ctx.arc(px,py,4,0,Math.PI*2); ctx.fill();
@@ -335,26 +344,74 @@
     for(let i=step;i<values.length;i+=step){
       const prev=values[i-step];
       const now=values[i];
-      markers.push({index:i,price:now,side: now>=prev ? 'BUY':'SELL'});
+      markers.push({index:i,ts:labels[i],price:now,side: now>=prev ? 'BUY':'SELL', reason:'mock_signal'});
     }
     return markers;
   }
 
+  function safeNum(v){ return (v===null || v===undefined || Number.isNaN(Number(v))) ? null : Number(v); }
+
   function renderCompare(results){
     const body=document.getElementById('btCompareBody');
     if(!results?.length){
-      body.innerHTML='<tr><td colspan="6" class="muted">(no results)</td></tr>';
+      body.innerHTML='<tr><td colspan="7" class="muted">(no results)</td></tr>';
       return;
     }
-    body.innerHTML = results.map(r=>`<tr><td>${r.engine||'-'}</td><td>${r.metrics?.roi_pct??'-'}</td><td>${r.metrics?.max_drawdown_pct??'-'}</td><td>${r.metrics?.trades??'-'}</td><td>${r.metrics?.final_equity??'-'}</td><td>${r.summary?.status||'-'}</td></tr>`).join('');
 
-    const first=results[0];
+    const rows=[...results].sort((a,b)=>{
+      const av=safeNum(a?.metrics?.[btSortState.key]);
+      const bv=safeNum(b?.metrics?.[btSortState.key]);
+      if(av===null && bv===null) return 0;
+      if(av===null) return 1;
+      if(bv===null) return -1;
+      return btSortState.dir==='asc' ? av-bv : bv-av;
+    });
+
+    const roiVals=rows.map(r=>safeNum(r.metrics?.roi_pct)).filter(v=>v!==null);
+    const mddVals=rows.map(r=>safeNum(r.metrics?.max_drawdown_pct)).filter(v=>v!==null);
+    const wrVals=rows.map(r=>safeNum(r.metrics?.win_rate)).filter(v=>v!==null);
+    const bestRoi=Math.max(...roiVals, -Infinity), worstRoi=Math.min(...roiVals, Infinity);
+    const bestWr=Math.max(...wrVals, -Infinity);
+    const bestMdd=Math.min(...mddVals, Infinity);
+
+    body.innerHTML = rows.map(r=>{
+      const m=r.metrics||{};
+      const roi=safeNum(m.roi_pct), mdd=safeNum(m.max_drawdown_pct), wr=safeNum(m.win_rate);
+      const wrClass=(wr!==null && wr===bestWr)?'best':'';
+      const roiClass=(roi!==null && roi===bestRoi)?'best':((roi!==null && roi===worstRoi)?'worst':'');
+      const mddClass=(mdd!==null && mdd===bestMdd)?'best':'';
+      return `<tr><td>${r.engine||'-'}</td><td class="${wrClass}">${m.win_rate??'-'}</td><td class="${roiClass}">${m.roi_pct??'-'}</td><td class="${mddClass}">${m.max_drawdown_pct??'-'}</td><td>${m.trades??'-'}</td><td>${m.final_equity??'-'}</td><td>${r.summary?.status||'-'}</td></tr>`;
+    }).join('');
+
+    const first=rows[0];
     const m=first?.metrics||{};
     document.getElementById('btKpiGrid').innerHTML=`
+      <div class="kpi-item"><b>WinRate</b><div>${m.win_rate??'-'}</div></div>
       <div class="kpi-item"><b>ROI%</b><div>${m.roi_pct??'-'}</div></div>
       <div class="kpi-item"><b>MDD%</b><div>${m.max_drawdown_pct??'-'}</div></div>
-      <div class="kpi-item"><b>Trades</b><div>${m.trades??'-'}</div></div>
       <div class="kpi-item"><b>Final Eq</b><div>${m.final_equity??'-'}</div></div>`;
+  }
+
+  function bindMarkerTooltip(markers){
+    const canvas=document.getElementById('btUnifiedChart');
+    const tip=document.getElementById('btMarkerTooltip');
+    canvas.onmousemove=(ev)=>{
+      if(!markers?.length){ tip.style.display='none'; return; }
+      const rect=canvas.getBoundingClientRect();
+      const x=ev.clientX-rect.left; const y=ev.clientY-rect.top;
+      let hit=null; let best=9999;
+      markers.forEach(m=>{
+        if(typeof m._px!=='number' || typeof m._py!=='number') return;
+        const d=Math.hypot(x-m._px, y-m._py);
+        if(d<best){ best=d; hit=m; }
+      });
+      if(!hit || best>10){ tip.style.display='none'; return; }
+      tip.style.display='block';
+      tip.style.left=(ev.pageX+12)+'px';
+      tip.style.top=(ev.pageY+12)+'px';
+      tip.innerHTML=`<b>${hit.side||'-'}</b><br>time: ${hit.ts||'-'}<br>price: ${hit.price??'-'}<br>reason: ${hit.reason||hit.reason_code||'n/a'}`;
+    };
+    canvas.onmouseleave=()=>{ tip.style.display='none'; };
   }
 
   function renderUnifiedChart(result){
@@ -362,11 +419,12 @@
     const eq=result?.equity_curve || {labels:[],values:[]};
     const labels=eq.labels||[];
     const values=eq.values||[];
-    let markers=(result?.trades||[]).map(t=>({index:t.index,price:t.price,side:t.side}));
+    let markers=(result?.trades||[]).map(t=>({index:t.index,ts:t.ts||labels[t.index],price:t.price,side:t.side,reason:t.reason||t.reason_code}));
     if(!markers.length) markers=buildMockMarkers(labels, values);
 
     if(btChart) btChart.destroy();
     btChart=new Chart(ctx,{type:'line',data:{labels,datasets:[{label:`${result?.engine||'backtest'} equity`,data:values,borderColor:'#2563eb',pointRadius:0,tension:0.1}]},plugins:[markerPlugin(markers)]});
+    bindMarkerTooltip(markers);
     document.getElementById('btMarkerStatus').textContent = `Markers: ${markers.length} (${markers.length? 'overlay active':'none'})`;
   }
 
@@ -381,9 +439,9 @@
     const r=await fetch('/api/backtest/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
     const j=await r.json();
     document.getElementById('btOut').textContent=JSON.stringify(j,null,2);
-    const results=j.results||[];
-    renderCompare(results);
-    const chartSource=results.find(x=>x.engine==='quick') || results[0];
+    btLastResults=j.results||[];
+    renderCompare(btLastResults);
+    const chartSource=btLastResults.find(x=>x.engine==='quick') || btLastResults[0];
     if(chartSource?.equity_curve?.labels?.length){
       renderUnifiedChart(chartSource);
     } else {
@@ -426,6 +484,14 @@
       btn.textContent=prevText;
     }
   }
+
+  document.querySelectorAll('th.sortable').forEach(th=>{
+    th.onclick=()=>{
+      const key=th.dataset.sort;
+      btSortState = { key, dir: (btSortState.key===key && btSortState.dir==='desc') ? 'asc' : 'desc' };
+      renderCompare(btLastResults);
+    };
+  });
 
   document.getElementById('refreshBtn').onclick=refreshCharts;
   document.getElementById('configBtn').onclick=()=>{const p=document.getElementById('configPanel');p.style.display=p.style.display==='none'?'block':'none';};

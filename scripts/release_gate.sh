@@ -5,6 +5,13 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LOG_DIR="$ROOT_DIR/logs"
 OUT_LOG="$LOG_DIR/release_gate_2026-02-22.log"
 REPORT="$ROOT_DIR/VERIFICATION_REPORT_AUTOGATE_2026-02-22.md"
+RUN_RISK=0
+
+for arg in "$@"; do
+  case "$arg" in
+    --with-risk) RUN_RISK=1 ;;
+  esac
+done
 
 mkdir -p "$LOG_DIR"
 
@@ -209,6 +216,13 @@ fi
   echo "- HTTPS redirect/HSTS는 앱 외부 프록시 환경에서 별도 검증 필요"
   echo "- 모킹 기반 Telegram 검증으로, 실 Telegram API 연동 E2E는 별도 수행 필요"
 } > "$REPORT"
+
+if [[ "$RUN_RISK" == "1" ]]; then
+  echo "[release-gate] running optional risk gate (--with-risk)"
+  if ! "$ROOT_DIR/scripts/risk_gate_check.sh"; then
+    status="FAIL"
+  fi
+fi
 
 if [[ "$status" == "PASS" ]]; then
   echo "[release-gate] completed: PASS"

@@ -44,7 +44,29 @@
 4. 차트 렌더 + marker overlay 노출
 5. 데이터 부족 시 fallback(mock) 차트 정상 표시
 
+## Pass-2 (interactive + 운영 사용성 개선)
+
+### 1) Marker tooltip 구현
+- `#btMarkerTooltip` 요소 추가
+- 차트 hover 시 최근접 marker hit-test로 tooltip 표시
+- 표시 필드: `time / price / side / reason`
+- 실데이터 marker가 없으면 mock marker reason(`mock_signal`) 사용
+
+### 2) 비교 테이블 정렬/강조 보강
+- 컬럼 추가/강화: WinRate, ROI, MDD
+- 헤더 클릭 정렬(`desc/asc` 토글): WinRate/ROI/MDD
+- 강조 규칙:
+  - 최고 ROI = `best`
+  - 최저 ROI = `worst`
+  - 최고 WinRate = `best`
+  - 최저(가장 양호) MDD = `best`
+
+### 3) 모바일 overflow 개선
+- 표 셀 `white-space: nowrap` + table wrapper scroll 유지
+- 모바일에서 버튼 간격/배치 보강(`.card .row button` 간격)
+- 기존 반응형과 결합해 버튼/표 깨짐 최소화
+
 ## 남은 연계 작업(백엔드 계약 이후)
-- `result.trades` 표준 스키마 확정(index/price/side/ts)
-- Marker tooltip 상세(reason/qty/sl/tp) 연결
+- `result.trades` 표준 스키마 확정(index/price/side/ts/reason)
+- Marker tooltip 상세(reason/qty/sl/tp/regime) 확장
 - Both 모드에서 엔진별 토글 레이어(quick vs legacy) 표시 강화

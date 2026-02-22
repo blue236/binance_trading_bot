@@ -2,7 +2,7 @@
 
 - Script: `scripts/release_gate.sh`
 - Log: `logs/release_gate_2026-02-22.log`
-- Executed at: 2026-02-22T16:45:35+01:00
+- Executed at: 2026-02-22T18:51:24+01:00
 
 ## Scope
 1. Auth gate regression
@@ -10,7 +10,7 @@
 
 ## Execution Log (excerpt)
 ```text
-[release-gate] started: 2026-02-22T16:45:33+01:00
+[release-gate] started: 2026-02-22T18:51:22+01:00
 [release-gate] root: /home/blue236/.openclaw/workspace/binance_trading_bot
 
 === RELEASE GATE SUMMARY ===
@@ -34,7 +34,7 @@ positions: 1
 paused: False
 [PASS] TG /restart non-owner denied :: Owner-only command.
 [PASS] TG /restart owner issues confirm token :: Pending change: restart -> now
-Reply /confirm db8be1 to apply (expires in 119s) or /cancel to discard.
+Reply /confirm 92ae34 to apply (expires in 119s) or /cancel to discard.
 [PASS] TG /confirm restart executes restart path :: ♻️ Restarting bot process...
 TOTAL: pass=9, fail=0
 RESULT: PASS
