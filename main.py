@@ -156,7 +156,7 @@ def connect_exchange(cfg):
     exchange.load_markets()
     return exchange
 
-def safe_fetch_balance(exchange, retries=5):
+def safe_fetch_balance(exchange, retries=5, backoff_sec=1.0, logger=None):
     for i in range(retries):
         try:
             return exchange.fetch_balance()
@@ -167,6 +167,19 @@ def safe_fetch_balance(exchange, retries=5):
             except Exception:
                 pass
             time.sleep(1 + i)   # 점진적 backoff
+        except (ccxt.NetworkError, ccxt.ExchangeNotAvailable, ccxt.RequestTimeout) as e:
+            NETWORK_HEALTH["consecutive_failures"] = int(NETWORK_HEALTH.get("consecutive_failures", 0)) + 1
+            NETWORK_HEALTH["last_error"] = str(e)
+            NETWORK_HEALTH["last_error_at"] = datetime.utcnow().isoformat() + "Z"
+            NETWORK_HEALTH["last_label"] = "fetch_balance"
+            if i < retries - 1:
+                if logger:
+                    logger.warning("fetch_balance transient failure (%d/%d): %s", i + 1, retries, str(e))
+                time.sleep(backoff_sec * (i + 1))
+                continue
+            if logger:
+                logger.error("fetch_balance failed after %d retries: %s", retries, str(e))
+            raise
     # 끝까지 실패하면 마지막 예외 다시 raise
     return exchange.fetch_balance()
 
@@ -178,13 +191,30 @@ def _network_cfg(cfg):
     return max(1, retry_count), max(0.1, backoff_sec)
 
 
+NETWORK_HEALTH = {
+    "consecutive_failures": 0,
+    "last_error": "",
+    "last_error_at": "",
+    "last_ok_at": "",
+    "last_label": "",
+}
+
+
 def call_with_retry(fn, *, retries=3, backoff_sec=1.0, logger=None, label="network_call"):
     last_err = None
     for attempt in range(1, int(retries) + 1):
         try:
-            return fn()
+            out = fn()
+            NETWORK_HEALTH["consecutive_failures"] = 0
+            NETWORK_HEALTH["last_ok_at"] = datetime.utcnow().isoformat() + "Z"
+            NETWORK_HEALTH["last_label"] = label
+            return out
         except (ccxt.NetworkError, ccxt.ExchangeNotAvailable, ccxt.RequestTimeout) as e:
             last_err = e
+            NETWORK_HEALTH["consecutive_failures"] = int(NETWORK_HEALTH.get("consecutive_failures", 0)) + 1
+            NETWORK_HEALTH["last_error"] = str(e)
+            NETWORK_HEALTH["last_error_at"] = datetime.utcnow().isoformat() + "Z"
+            NETWORK_HEALTH["last_label"] = label
             if attempt < retries:
                 if logger:
                     logger.warning("%s transient failure (%d/%d): %s", label, attempt, retries, str(e))
@@ -714,8 +744,15 @@ def responsive_wait(seconds, tg, offset, cfg, state, equity_now, base_ccy, state
         time.sleep(3)
     return offset
 
-def fetch_ohlc(exchange, symbol, timeframe, limit=500):
-    o = exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
+def fetch_ohlc(exchange, symbol, timeframe, limit=500, cfg=None, logger=None):
+    retries, backoff = _network_cfg(cfg or {})
+    o = call_with_retry(
+        lambda: exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit),
+        retries=retries,
+        backoff_sec=backoff,
+        logger=logger,
+        label=f"fetch_ohlcv[{symbol},{timeframe}]",
+    )
     df = pd.DataFrame(o, columns=["ts","o","h","l","c","v"])
     df["ts"] = pd.to_datetime(df["ts"], unit="ms", utc=True)
     return df
@@ -723,7 +760,7 @@ def fetch_ohlc(exchange, symbol, timeframe, limit=500):
 def regime_filter(exchange, symbol, cfg):
     logger = logging.getLogger("bot")
     tf = cfg["general"]["timeframe_regime"]
-    d = fetch_ohlc(exchange, symbol, tf, 400)
+    d = fetch_ohlc(exchange, symbol, tf, 400, cfg=cfg, logger=logger)
     ema200 = EMAIndicator(d["c"], cfg["strategy"]["ema_slow"]).ema_indicator()
     slope_pos = (ema200.diff().iloc[-1] > 0)
     adx_val = ADXIndicator(d["h"], d["l"], d["c"], cfg["strategy"]["adx_len"]).adx().iloc[-1]
@@ -914,6 +951,17 @@ def sync_external_controls(state_path, state, cfg):
     return state
 
 
+def _update_network_health_state(state):
+    state.setdefault("runtime_health", {})
+    state["runtime_health"]["network"] = {
+        "consecutive_failures": int(NETWORK_HEALTH.get("consecutive_failures", 0)),
+        "last_error": NETWORK_HEALTH.get("last_error", ""),
+        "last_error_at": NETWORK_HEALTH.get("last_error_at", ""),
+        "last_ok_at": NETWORK_HEALTH.get("last_ok_at", ""),
+        "last_label": NETWORK_HEALTH.get("last_label", ""),
+    }
+
+
 def daily_pnl_guard(cfg, equity_now, equity_start):
     if equity_start <= 0:
         return False
@@ -1011,7 +1059,8 @@ def main():
             pos_syms = list(state["positions"].keys())
             ticker_syms = sorted(set(symbols + pos_syms))
             tickers = safe_fetch_tickers(exchange, ticker_syms, cfg, logger=logger) if ticker_syms else {}
-            balances = safe_fetch_balance(exchange)
+            n_retries, n_backoff = _network_cfg(cfg)
+            balances = safe_fetch_balance(exchange, retries=n_retries, backoff_sec=n_backoff, logger=logger)
             balances_total = balances.get("total", {})
             balances_free = balances.get("free", {})
             equity_now = fetch_equity_usdt(exchange, base_ccy, balances_total, tickers)
@@ -1055,7 +1104,7 @@ def main():
                 if regime == "none":
                     logger.debug("Skip %s: no regime (adx=%.2f)", symbol, adx_val)
                     continue
-                df = fetch_ohlc(exchange, symbol, cfg["general"]["timeframe_signal"], 300)
+                df = fetch_ohlc(exchange, symbol, cfg["general"]["timeframe_signal"], 300, cfg=cfg, logger=logger)
                 signal, params = h1_signals(df, cfg, regime)
                 if not signal:
                     logger.debug("Skip %s: no signal (regime=%s)", symbol, regime)
@@ -1133,7 +1182,7 @@ def main():
 
                 # trend trailing
                 if pos["signal"] == "T_LONG" and "trail_mult" in pos:
-                    df = fetch_ohlc(exchange, sym, cfg["general"]["timeframe_signal"], 200)
+                    df = fetch_ohlc(exchange, sym, cfg["general"]["timeframe_signal"], 200, cfg=cfg, logger=logger)
                     atr = AverageTrueRange(df["h"], df["l"], df["c"], cfg["strategy"]["atr_len"]).average_true_range().iloc[-1]
                     hi_since = df["c"].iloc[-200:].max()
                     trail = hi_since - pos["trail_mult"] * atr
@@ -1193,6 +1242,8 @@ def main():
 
             # equity snapshot
             equity_now = fetch_equity_usdt(exchange, base_ccy, balances_total, tickers)
+            _update_network_health_state(state)
+            write_state(state_path, state)
             log_csv(csv_dir, "equity", {"ts": loop_ts.isoformat(), "equity": equity_now}, fieldnames=EQUITY_FIELDS)
             sleep_sec = int(cfg["strategy"].get("loop_sleep_seconds", 60) or 60)
             logger.info("Equity snapshot: %.4f and sleep %d seconds", equity_now, sleep_sec)

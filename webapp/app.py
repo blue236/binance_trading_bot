@@ -491,6 +491,29 @@ def _poll_server_telegram_commands() -> None:
         _save_offset(new_offset)
 
 
+def _ai_state_path() -> Path:
+    if AI_CONFIG_PATH.exists():
+        try:
+            cfg = yaml.safe_load(AI_CONFIG_PATH.read_text()) or {}
+            p = (cfg.get("logging") or {}).get("state_file") or "./state.json"
+            return (ROOT / p).resolve()
+        except Exception:
+            pass
+    return (ROOT / "state.json").resolve()
+
+
+def _ai_network_health() -> dict:
+    path = _ai_state_path()
+    if not path.exists():
+        return {"available": False}
+    try:
+        s = json.loads(path.read_text())
+        net = ((s.get("runtime_health") or {}).get("network") or {}) if isinstance(s, dict) else {}
+        return {"available": True, **net}
+    except Exception as e:
+        return {"available": False, "error": str(e)}
+
+
 def _ai_log_path() -> Path:
     if AI_CONFIG_PATH.exists():
         try:
@@ -765,7 +788,11 @@ def run_backtester(req: BacktestRequest):
 
 @app.get("/api/ai/status")
 def ai_status():
-    return {"running": _is_ai_running(), "log_tail": _tail_text(_ai_log_path(), 10)}
+    return {
+        "running": _is_ai_running(),
+        "log_tail": _tail_text(_ai_log_path(), 10),
+        "network_health": _ai_network_health(),
+    }
 
 
 @app.post("/api/ai/start")
