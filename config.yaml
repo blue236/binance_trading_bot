@@ -7,8 +7,8 @@ general:
   timeframe_regime: 1d
   exchange: binance
   dry_run: true
-  aggressive_mode: false
-  base_currency: USDT
+  aggressive_mode: ture
+  base_currency: USDC
   min_notional_usdc: 10.0
 risk:
   per_trade_risk_pct: 0.5
@@ -68,6 +68,9 @@ logging:
   state_file: ./state.json
   tz: CET
   level: DEBUG
+network:
+  retry_count: 3
+  retry_backoff_sec: 1.0
 credentials:
   api_key: ''
   api_secret: ''

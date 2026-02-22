@@ -160,7 +160,7 @@ def safe_fetch_balance(exchange, retries=5):
     for i in range(retries):
         try:
             return exchange.fetch_balance()
-        except ccxt.base.errors.InvalidNonce as e:
+        except ccxt.base.errors.InvalidNonce:
             # Binance -1021 대응
             try:
                 exchange.load_time_difference()
@@ -169,6 +169,54 @@ def safe_fetch_balance(exchange, retries=5):
             time.sleep(1 + i)   # 점진적 backoff
     # 끝까지 실패하면 마지막 예외 다시 raise
     return exchange.fetch_balance()
+
+
+def _network_cfg(cfg):
+    n = (cfg or {}).get("network", {}) if isinstance(cfg, dict) else {}
+    retry_count = int(n.get("retry_count", 3) or 3)
+    backoff_sec = float(n.get("retry_backoff_sec", 1.0) or 1.0)
+    return max(1, retry_count), max(0.1, backoff_sec)
+
+
+def call_with_retry(fn, *, retries=3, backoff_sec=1.0, logger=None, label="network_call"):
+    last_err = None
+    for attempt in range(1, int(retries) + 1):
+        try:
+            return fn()
+        except (ccxt.NetworkError, ccxt.ExchangeNotAvailable, ccxt.RequestTimeout) as e:
+            last_err = e
+            if attempt < retries:
+                if logger:
+                    logger.warning("%s transient failure (%d/%d): %s", label, attempt, retries, str(e))
+                # incremental backoff
+                time.sleep(backoff_sec * attempt)
+                continue
+            break
+    if logger:
+        logger.error("%s failed after %d retries: %s", label, retries, str(last_err))
+    raise last_err
+
+
+def safe_fetch_tickers(exchange, symbols, cfg, logger=None):
+    retries, backoff = _network_cfg(cfg)
+    return call_with_retry(
+        lambda: exchange.fetch_tickers(symbols),
+        retries=retries,
+        backoff_sec=backoff,
+        logger=logger,
+        label=f"fetch_tickers[{len(symbols)}]",
+    )
+
+
+def safe_fetch_ticker(exchange, symbol, cfg, logger=None):
+    retries, backoff = _network_cfg(cfg)
+    return call_with_retry(
+        lambda: exchange.fetch_ticker(symbol),
+        retries=retries,
+        backoff_sec=backoff,
+        logger=logger,
+        label=f"fetch_ticker[{symbol}]",
+    )
 
 def connect_telegram(cfg):
     alerts = cfg.get("alerts", {})
@@ -764,7 +812,7 @@ def h1_signals(df, cfg, regime):
 def fetch_equity_usdt(exchange, base_ccy="USDT", balances=None, tickers=None):
     balances = balances or safe_fetch_balance(exchange)["total"]
     equity = balances.get(base_ccy, 0.0)
-    tickers = tickers or exchange.fetch_tickers()
+    tickers = tickers or safe_fetch_tickers(exchange, list(exchange.markets.keys()), {"network": {"retry_count": 2, "retry_backoff_sec": 0.5}})
     for asset, amt in balances.items():
         if asset in [base_ccy, None] or not amt:
             continue
@@ -962,7 +1010,7 @@ def main():
             symbols = cfg["general"]["symbols"]
             pos_syms = list(state["positions"].keys())
             ticker_syms = sorted(set(symbols + pos_syms))
-            tickers = exchange.fetch_tickers(ticker_syms) if ticker_syms else {}
+            tickers = safe_fetch_tickers(exchange, ticker_syms, cfg, logger=logger) if ticker_syms else {}
             balances = safe_fetch_balance(exchange)
             balances_total = balances.get("total", {})
             balances_free = balances.get("free", {})
@@ -1077,7 +1125,7 @@ def main():
             for sym, pos in positions.items():
                 last = get_last_price(tickers, sym)
                 if last is None:
-                    last = exchange.fetch_ticker(sym)["last"]
+                    last = safe_fetch_ticker(exchange, sym, cfg, logger=logger)["last"]
                 qty = pos["qty"]
                 sl = pos["sl"]
                 changed = False
