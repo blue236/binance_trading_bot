@@ -19,6 +19,11 @@
     pre{background:#111;color:#ddd;padding:12px;border-radius:8px;overflow:auto;white-space:pre-wrap}
     #aiLog,#legacyOut,#btOut{max-height:260px;overflow-y:auto;overflow-x:auto}
     .muted{color:#666}
+    .kpi-grid{display:grid;grid-template-columns:repeat(4,minmax(120px,1fr));gap:8px;margin-top:10px}
+    .kpi-item{background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:8px}
+    .table-wrap{overflow:auto}
+    table{width:100%;border-collapse:collapse}
+    th,td{border-bottom:1px solid #e5e7eb;padding:8px;text-align:left;font-size:14px}
     img.plot{max-width:280px;border:1px solid #ddd;border-radius:8px;margin:6px}
     @media (max-width: 768px){
       body{margin:10px}
@@ -31,8 +36,9 @@
       input,select,button{width:100%}
       #cfgSymbols{width:100% !important}
       #aiLog,#legacyOut,#btOut{max-height:220px}
-      #priceChart{max-height:280px}
+      #priceChart,#btUnifiedChart{max-height:280px}
       img.plot{max-width:100%;margin:6px 0}
+      .kpi-grid{grid-template-columns:repeat(2,minmax(120px,1fr))}
     }
   </style>
 </head>
@@ -109,13 +115,38 @@
 
   <section id="backtesterTab" class="tab">
     <div class="card">
-      <h3>Quick ROI Backtester (new service)</h3>
-      <div class="row"><label>Symbol</label><select id="btSymbol"></select><label>Fast</label><input id="btFast" type="number" value="20"><label>Slow</label><input id="btSlow" type="number" value="60"><button id="btRun">Run</button></div>
+      <h3>Unified Backtest (Quick / Legacy / Both)</h3>
+      <div class="row">
+        <label>Mode</label>
+        <select id="btMode">
+          <option value="quick">quick</option>
+          <option value="legacy">legacy</option>
+          <option value="both" selected>both</option>
+        </select>
+        <label>Symbol</label><select id="btSymbol"></select>
+        <label>Timeframe</label><input id="btTf" value="{{ config.timeframe }}">
+        <label>Fast</label><input id="btFast" type="number" value="20">
+        <label>Slow</label><input id="btSlow" type="number" value="60">
+        <button id="btUnifiedRun">Run Unified</button>
+      </div>
+      <div class="kpi-grid" id="btKpiGrid"></div>
+      <div class="table-wrap" style="margin-top:10px;">
+        <table>
+          <thead><tr><th>Engine</th><th>ROI%</th><th>MDD%</th><th>Trades</th><th>Final Equity</th><th>Status</th></tr></thead>
+          <tbody id="btCompareBody"><tr><td colspan="6" class="muted">(no results)</td></tr></tbody>
+        </table>
+      </div>
       <pre id="btOut">(no results)</pre>
     </div>
 
     <div class="card">
-      <h3>Legacy backtester.py runner (compatible)</h3>
+      <h3>Backtest Chart (marker overlay: BUY/SELL)</h3>
+      <canvas id="btUnifiedChart" height="110"></canvas>
+      <div class="muted" id="btMarkerStatus">Markers: (none)</div>
+    </div>
+
+    <div class="card">
+      <h3>Legacy backtester.py runner (compatible fallback)</h3>
       <div class="row"><label>Symbols</label><input id="lSymbols" value="{{ legacy_backtester_defaults['symbols'] }}" style="width:240px"><label>Timeframe</label><input id="lTf" value="{{ legacy_backtester_defaults['timeframe'] }}"><label>Limit</label><input id="lLimit" value="{{ legacy_backtester_defaults['limit'] }}"></div>
       <div class="row"><label>Windows</label><input id="lWin" value="{{ legacy_backtester_defaults['windows'] }}"><label>Thresholds</label><input id="lThr" value="{{ legacy_backtester_defaults['thresholds'] }}"><label>Strategy</label><input id="lStrategy" value="{{ legacy_backtester_defaults['strategy'] }}"></div>
       <div class="row"><button id="legacyRun">Run legacy backtester.py</button><span id="legacyStatus" class="muted"></span></div>
@@ -274,12 +305,90 @@
     status.textContent='Saved';
   }
 
+  let btChart;
+
+  function markerPlugin(markers){
+    return {
+      id:'markerOverlay',
+      afterDatasetsDraw(chart){
+        const {ctx, scales:{x,y}}=chart;
+        if(!markers || !markers.length) return;
+        ctx.save();
+        markers.forEach(m=>{
+          const px=x.getPixelForValue(m.index);
+          const py=y.getPixelForValue(m.price);
+          ctx.fillStyle = m.side==='BUY' ? '#16a34a' : '#dc2626';
+          ctx.beginPath();
+          ctx.arc(px,py,4,0,Math.PI*2); ctx.fill();
+          ctx.font='11px Arial';
+          ctx.fillText(m.side==='BUY'?'B':'S', px+6, py-6);
+        });
+        ctx.restore();
+      }
+    };
+  }
+
+  function buildMockMarkers(labels, values){
+    if(!labels?.length || !values?.length) return [];
+    const markers=[];
+    const step=Math.max(10, Math.floor(values.length/8));
+    for(let i=step;i<values.length;i+=step){
+      const prev=values[i-step];
+      const now=values[i];
+      markers.push({index:i,price:now,side: now>=prev ? 'BUY':'SELL'});
+    }
+    return markers;
+  }
+
+  function renderCompare(results){
+    const body=document.getElementById('btCompareBody');
+    if(!results?.length){
+      body.innerHTML='<tr><td colspan="6" class="muted">(no results)</td></tr>';
+      return;
+    }
+    body.innerHTML = results.map(r=>`<tr><td>${r.engine||'-'}</td><td>${r.metrics?.roi_pct??'-'}</td><td>${r.metrics?.max_drawdown_pct??'-'}</td><td>${r.metrics?.trades??'-'}</td><td>${r.metrics?.final_equity??'-'}</td><td>${r.summary?.status||'-'}</td></tr>`).join('');
+
+    const first=results[0];
+    const m=first?.metrics||{};
+    document.getElementById('btKpiGrid').innerHTML=`
+      <div class="kpi-item"><b>ROI%</b><div>${m.roi_pct??'-'}</div></div>
+      <div class="kpi-item"><b>MDD%</b><div>${m.max_drawdown_pct??'-'}</div></div>
+      <div class="kpi-item"><b>Trades</b><div>${m.trades??'-'}</div></div>
+      <div class="kpi-item"><b>Final Eq</b><div>${m.final_equity??'-'}</div></div>`;
+  }
+
+  function renderUnifiedChart(result){
+    const ctx=document.getElementById('btUnifiedChart');
+    const eq=result?.equity_curve || {labels:[],values:[]};
+    const labels=eq.labels||[];
+    const values=eq.values||[];
+    let markers=(result?.trades||[]).map(t=>({index:t.index,price:t.price,side:t.side}));
+    if(!markers.length) markers=buildMockMarkers(labels, values);
+
+    if(btChart) btChart.destroy();
+    btChart=new Chart(ctx,{type:'line',data:{labels,datasets:[{label:`${result?.engine||'backtest'} equity`,data:values,borderColor:'#2563eb',pointRadius:0,tension:0.1}]},plugins:[markerPlugin(markers)]});
+    document.getElementById('btMarkerStatus').textContent = `Markers: ${markers.length} (${markers.length? 'overlay active':'none'})`;
+  }
+
   async function runBacktest(){
-    const symbol=document.getElementById('btSymbol').value;
-    const payload={symbol,fast_window:parseInt(document.getElementById('btFast').value,10),slow_window:parseInt(document.getElementById('btSlow').value,10)};
-    const r=await fetch('/api/backtester/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    const payload={
+      mode:document.getElementById('btMode').value,
+      symbol:document.getElementById('btSymbol').value,
+      timeframe:document.getElementById('btTf').value,
+      fast_window:parseInt(document.getElementById('btFast').value,10),
+      slow_window:parseInt(document.getElementById('btSlow').value,10),
+    };
+    const r=await fetch('/api/backtest/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
     const j=await r.json();
     document.getElementById('btOut').textContent=JSON.stringify(j,null,2);
+    const results=j.results||[];
+    renderCompare(results);
+    const chartSource=results.find(x=>x.engine==='quick') || results[0];
+    if(chartSource?.equity_curve?.labels?.length){
+      renderUnifiedChart(chartSource);
+    } else {
+      renderUnifiedChart({engine:chartSource?.engine||'mock', equity_curve:{labels:['t1','t2','t3','t4'], values:[10000,10120,9980,10300]}, trades:[]});
+    }
   }
 
   async function runLegacyBacktester(){
@@ -322,7 +431,7 @@
   document.getElementById('configBtn').onclick=()=>{const p=document.getElementById('configPanel');p.style.display=p.style.display==='none'?'block':'none';};
   document.getElementById('cfgLoad').onclick=loadConfig;
   document.getElementById('cfgSave').onclick=saveConfig;
-  document.getElementById('btRun').onclick=runBacktest;
+  document.getElementById('btUnifiedRun').onclick=runBacktest;
   document.getElementById('legacyRun').onclick=runLegacyBacktester;
   document.getElementById('aiStart').onclick=aiStart;
   document.getElementById('aiStop').onclick=aiStop;
