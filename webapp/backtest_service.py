@@ -24,19 +24,34 @@ class BacktestService:
         qty = 0.0
         equity_curve = []
         trades = 0
+        markers = []
 
-        for _, r in df.iterrows():
-            ts = int(r["ts"])
-            price = float(r["close"])
-            signal_buy = r["fast"] > r["slow"]
+        for i, r in enumerate(df.itertuples(index=False), start=0):
+            ts = int(r.ts)
+            price = float(r.close)
+            signal_buy = r.fast > r.slow
             if signal_buy and qty == 0.0:
                 qty = (cash * (1.0 - fee_rate)) / price
                 cash = 0.0
                 trades += 1
+                markers.append({
+                    "ts": ts,
+                    "index": i,
+                    "price": price,
+                    "side": "buy",
+                    "reason": f"sma_cross_up(fast={fast},slow={slow})",
+                })
             elif (not signal_buy) and qty > 0.0:
                 cash = qty * price * (1.0 - fee_rate)
                 qty = 0.0
                 trades += 1
+                markers.append({
+                    "ts": ts,
+                    "index": i,
+                    "price": price,
+                    "side": "sell",
+                    "reason": f"sma_cross_down(fast={fast},slow={slow})",
+                })
             equity = cash + qty * price
             equity_curve.append((ts, float(equity), price))
 
@@ -63,6 +78,7 @@ class BacktestService:
             "trades": trades,
             "equity_curve": {"labels": labels, "values": values},
             "price_curve": {"labels": labels, "values": prices},
+            "markers": markers,
         }
 
     def to_unified_quick(self, symbol: str, quick_result: dict) -> dict:
@@ -71,6 +87,7 @@ class BacktestService:
             "summary": {
                 "symbol": symbol,
                 "status": "ok",
+                "signal_basis": "config.strategy ema_fast/ema_slow -> SMA crossover replay",
             },
             "metrics": {
                 "roi_pct": quick_result.get("roi_pct"),
@@ -80,6 +97,7 @@ class BacktestService:
             },
             "trades": [],
             "equity_curve": quick_result.get("equity_curve") or {"labels": [], "values": []},
+            "markers": quick_result.get("markers") or [],
         }
 
     def to_unified_legacy(self, symbol: str, legacy_output: str, returncode: int = 0) -> dict:
@@ -101,6 +119,7 @@ class BacktestService:
             },
             "trades": [],
             "equity_curve": {"labels": [], "values": []},
+            "markers": [],
             "raw_output": (legacy_output or "")[:8000],
         }
 

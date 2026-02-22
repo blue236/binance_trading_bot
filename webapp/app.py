@@ -837,8 +837,12 @@ def run_backtest_unified(payload: Dict = Body(...)):
 
         symbol = str((payload or {}).get("symbol") or (cfg.symbols[0] if cfg.symbols else "BTC/USDT"))
         timeframe = str((payload or {}).get("timeframe") or cfg.timeframe)
-        fast = int((payload or {}).get("fast_window", 20))
-        slow = int((payload or {}).get("slow_window", 60))
+        main_cfg = _load_main_cfg()
+        stg = (main_cfg.get("strategy") or {}) if isinstance(main_cfg, dict) else {}
+        fast_default = int(stg.get("ema_fast", 20) or 20)
+        slow_default = int(stg.get("ema_slow", 60) or 60)
+        fast = int((payload or {}).get("fast_window", fast_default))
+        slow = int((payload or {}).get("slow_window", slow_default))
         starting_capital = float((payload or {}).get("starting_capital", cfg.starting_capital))
         fee_rate = float((payload or {}).get("fee_rate", cfg.fee_rate))
 
