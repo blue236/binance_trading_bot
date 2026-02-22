@@ -1,0 +1,136 @@
+general:
+  symbols:
+    - BTC/USDT
+    - ETH/USDT
+    - SOL/USDT
+  timeframe_signal: 4h
+  timeframe_regime: 1d
+  timeframe_execution: 15m
+  exchange: binance
+  dry_run: true
+  base_currency: USDT
+  min_notional_usdt: 10.0
+
+risk:
+  # Balanced baseline
+  per_trade_risk_pct: 0.5
+  daily_loss_stop_pct: 2.0
+  max_concurrent_positions: 2
+  cooldown_hours: 8
+  max_portfolio_heat_pct: 1.5
+
+strategy:
+  mode: hybrid_trend_pullback
+
+  # Regime filters
+  adx_len: 14
+  trend_adx_threshold: 20
+  range_adx_threshold: 16
+  ema_fast: 50
+  ema_slow: 200
+  ema_pullback: 20
+
+  # Volatility guards (ATR / price)
+  atr_len: 14
+  atr_price_guard_btc: 0.040
+  atr_price_guard_eth: 0.055
+  atr_price_guard_sol: 0.075
+
+  # Entry quality / confirmation
+  require_1d_trend_filter: true
+  require_vwap_reclaim_15m: true
+
+  # Stop/TP management
+  atr_sl_trend_mult: 1.8
+  atr_sl_range_mult: 1.2
+  take_profit_r1: 1.2
+  take_profit_r2: 2.2
+  take_profit_size_r1_pct: 35
+  take_profit_size_r2_pct: 35
+  runner_size_pct: 30
+  trailing_atr_mult: 3.0
+  break_even_after_r1: true
+
+  # Legacy compatibility fields (used by current main.py)
+  donchian_len: 20
+  rsi_len: 14
+  rsi_overheat: 80
+  bb_len: 20
+  bb_mult: 2.0
+  atr_sl_mr_mult: 1.2
+  rsi_mr_threshold: 35
+  mean_reversion_time_stop_hours: 24
+  loop_sleep_seconds: 60
+
+portfolio:
+  risk_multiplier:
+    BTC/USDT: 1.0
+    ETH/USDT: 0.8
+    SOL/USDT: 0.6
+
+execution:
+  slippage_guard_btc: 0.0015
+  slippage_guard_eth: 0.0020
+  slippage_guard_sol: 0.0035
+
+alerts:
+  enable_telegram: true
+  telegram_bot_token: ""
+  telegram_chat_id: ""
+
+  # Approval workflow (implemented)
+  enable_trade_approval: true
+  approval_timeout_sec: 180
+
+  # Approval policy suggestions for team implementation
+  auto_approve_score_threshold: 80
+  manual_approve_score_min: 65
+  deny_below_score: 65
+  require_manual_approval_for_sol_high_vol: true
+  require_manual_approval_counter_trend: true
+
+kill_switch:
+  enabled: true
+  rolling_winrate_min_5trades: 0.30
+  rolling_profit_factor_min: 0.90
+  max_daily_loss_r: 2.0
+  max_7d_drawdown_pct: 5.0
+  consecutive_losses_limit: 4
+  slippage_drift_multiplier_limit: 1.5
+
+logging:
+  csv_dir: ./logs
+  state_file: ./state.json
+  tz: CET
+  level: INFO
+
+credentials:
+  api_key: ""
+  api_secret: ""
+
+profiles:
+  conservative:
+    risk:
+      per_trade_risk_pct: 0.25
+      max_concurrent_positions: 1
+      max_portfolio_heat_pct: 1.0
+    strategy:
+      trend_adx_threshold: 24
+      atr_sl_trend_mult: 2.0
+      take_profit_r1: 1.5
+      take_profit_r2: 2.5
+    alerts:
+      approval_timeout_sec: 240
+
+  aggressive:
+    risk:
+      per_trade_risk_pct: 0.9
+      max_concurrent_positions: 3
+      max_portfolio_heat_pct: 2.5
+    strategy:
+      trend_adx_threshold: 18
+      range_adx_threshold: 18
+      atr_sl_trend_mult: 1.6
+      trailing_atr_mult: 3.5
+    alerts:
+      approval_timeout_sec: 120

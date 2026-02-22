@@ -1,22 +1,98 @@
-# Binance Spot Auto-Trading Bot (with GUI Config)
+# Binance Trading Bot — Web Architecture Redesign
 
-**Features**
-- Spot-only (no futures), Binance via `ccxt`
-- Regime-aware strategy (Trend/Range) with ATR-based risk
-- GUI (`gui.py`) to edit `config.yaml`, test Telegram, and **Start/Stop** the bot
-- CSV logging to `./logs`, optional Telegram alerts
+This branch introduces a new modular **web-first architecture** to make feature extension easier.
 
-## Quick Start
+## New architecture (`webapp/`)
+
+- `webapp/app.py` — FastAPI server (UI + APIs)
+- `webapp/models.py` — typed request/config models
+- `webapp/config_manager.py` — load/save YAML config
+- `webapp/storage.py` — SQLite cache for OHLCV + metadata
+- `webapp/chart_service.py` — Binance OHLCV fetch + daily/manual refresh
+- `webapp/backtest_service.py` — ROI simulator (SMA crossover)
+- `webapp/templates/index.html` — main dashboard UI
+
+## Implemented requested features
+
+1. **Web based UI server**
+   - FastAPI + Jinja UI
+2. **Main page coin price chart**
+   - Select symbol chart on main page
+   - Daily refresh via scheduler (`refresh_cron`)
+   - Manual **Refresh Charts** button
+3. **Config button**
+   - Load config to panel
+   - Save edited options to YAML config file
+4. **Backtester button**
+   - Run ROI simulation from UI
+   - Shows ROI, drawdown, trades, equity curve data in result panel
+
+## Run
+
 ```bash
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-python gui.py
+chmod +x run_web_ui.sh
+./run_web_ui.sh
 ```
-1) In the GUI, fill API keys (withdrawal OFF, IP whitelist recommended), set parameters.
-2) Click **Save Config** then **Start Bot** (starts `main.py` as a background process).
-3) Start with **Dry-Run** ON. After several days, switch to live.
 
-## Notes
-- Requires Python 3.9+
-- On servers without display, use `xvfb` or edit `config.yaml` manually and run `python main.py`.
-- See comments in `config.yaml` for all parameters.
+Default URL: `http://127.0.0.1:8080`
+
+## Config file
+
+`web_config.yaml` is auto-created on first run.
+
+Core fields:
+- `symbols`
+- `timeframe`
+- `history_limit`
+- `refresh_cron` (daily scheduler)
+- `starting_capital`
+- `fee_rate`
+
+## API quick reference
+
+- `GET /api/config`
+- `POST /api/config/load`
+- `POST /api/config/save`
+- `GET /api/charts?symbol=BTC/USDT`
+- `POST /api/charts/refresh`
+- `POST /api/backtester/run`
+- `GET /api/health`
+
+## Credential security
+
+Secrets are no longer stored in plaintext config files.
+
+- `config.yaml` editor masks and strips secret fields on save.
+- Web secrets manager stores encrypted credentials in `.credentials.enc.json`.
+- Set `BTB_CREDENTIALS_PASSPHRASE` before saving secrets.
+
+Example:
+
+```bash
+export BTB_CREDENTIALS_PASSPHRASE='use-a-long-random-passphrase'
+./run_web_ui.sh
+```
+
+Environment variables (`BINANCE_API_KEY`, `BINANCE_API_SECRET`, etc.) still override stored values.
+
+## Operational docs
+
+- QA release gate checklist: `QA_RELEASE_GATE_CHECKLIST.md`
+- Security cookie policy: `SECURITY_COOKIE_POLICY.md`
+- Mobile web QA report: `MOBILE_WEB_QA_REPORT.md`
+- M5 trading readiness report: `M5_TRADING_READINESS_REPORT_2026-02-22.md`
+- M6 controlled launch report: `M6_CONTROLLED_LAUNCH_REPORT_2026-02-22.md`
+- Controlled launch policy: `LAUNCH_POLICY.yaml`
+
+## Gate scripts
+
+```bash
+# baseline + risk gate
+./scripts/release_gate.sh --with-risk
+
+# M5 readiness gate
+./scripts/m5_trading_readiness_gate.sh
+
+# M6 controlled launch gate
+./scripts/m6_controlled_launch_gate.sh
+```

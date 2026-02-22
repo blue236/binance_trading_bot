@@ -5,3 +5,11 @@ state.json
 config.yaml
 .credentials.json
 credentials.json
+web_config.yaml
+webapp_state.sqlite
+__pycache__/
+.credentials.enc.json
+.env
+.web_tg_offset
+datasheets/
+plots/

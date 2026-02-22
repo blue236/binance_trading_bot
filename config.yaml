@@ -3,7 +3,7 @@ general:
   - BTC/USDC
   - ETH/USDC
   - SOL/USDC
-  timeframe_signal: 1h
+  timeframe_signal: 4h
   timeframe_regime: 1d
   exchange: binance
   dry_run: true
@@ -13,7 +13,7 @@ general:
 risk:
   per_trade_risk_pct: 0.5
   daily_loss_stop_pct: 2.0
-  max_concurrent_positions: 3
+  max_concurrent_positions: 2
   cooldown_hours: 8
 strategy:
   adx_len: 14
@@ -24,46 +24,53 @@ strategy:
   rsi_len: 14
   rsi_overheat: 80
   atr_len: 14
-  atr_sl_trend_mult: 1.5
-  atr_trail_mult: 2.5
+  atr_sl_trend_mult: 1.8
+  atr_trail_mult: 3.0
   bb_len: 20
   bb_mult: 2.0
   atr_sl_mr_mult: 1.2
-  rsi_mr_threshold: 30
+  rsi_mr_threshold: 35
   mean_reversion_time_stop_hours: 24
+  loop_sleep_seconds: 60
 aggressive:
   general:
-    timeframe_signal: 15m
-    min_notional_usdc: 5.0
+    timeframe_signal: 4h
+    min_notional_usdc: 10.0
   risk:
-    per_trade_risk_pct: 1.0
+    per_trade_risk_pct: 0.9
     daily_loss_stop_pct: 4.0
-    max_concurrent_positions: 5
+    max_concurrent_positions: 3
     cooldown_hours: 1
   strategy:
-    adx_len: 10
-    trend_adx_threshold: 15
-    ema_fast: 20
-    ema_slow: 100
-    donchian_len: 10
+    adx_len: 14
+    trend_adx_threshold: 18
+    ema_fast: 50
+    ema_slow: 200
+    donchian_len: 20
     rsi_overheat: 85
-    atr_sl_trend_mult: 1.0
-    atr_trail_mult: 1.8
-    bb_len: 14
-    bb_mult: 1.6
-    atr_sl_mr_mult: 1.0
+    atr_sl_trend_mult: 1.6
+    atr_trail_mult: 3.5
+    bb_len: 20
+    bb_mult: 2.0
+    atr_sl_mr_mult: 1.2
     rsi_mr_threshold: 35
-    mean_reversion_time_stop_hours: 8
+    mean_reversion_time_stop_hours: 12
   loop_sleep_seconds: 60
 alerts:
   enable_telegram: true
-  telegram_bot_token: ""
-  telegram_chat_id: ""
+  telegram_bot_token: ''
+  telegram_chat_id: ''
+  enable_trade_approval: true
+  approval_timeout_sec: 180
+  telegram_owner_user_id: ''
 logging:
   csv_dir: ./logs
   state_file: ./state.json
   tz: CET
   level: DEBUG
+network:
+  retry_count: 3
+  retry_backoff_sec: 1.0
 credentials:
-  api_key: ""
-  api_secret: ""
+  api_key: ''
+  api_secret: ''
