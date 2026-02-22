@@ -6,6 +6,13 @@ source .venv/bin/activate
 pip install --upgrade pip setuptools wheel
 pip install -r requirements.txt
 
+if [ -f .env ]; then
+  set -a
+  # shellcheck disable=SC1091
+  source .env
+  set +a
+fi
+
 HOST="${BTB_WEB_HOST:-127.0.0.1}"
 PORT="${BTB_WEB_PORT:-8080}"
 
