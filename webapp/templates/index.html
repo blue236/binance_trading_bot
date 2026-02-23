@@ -101,6 +101,7 @@
 
     <div class="card">
       <canvas id="priceChart" height="100"></canvas>
+      <div class="muted" id="priceMarkerStatus">Signals: (none)</div>
     </div>
 
     <div class="card" id="configPanel" style="display:none;">
@@ -277,12 +278,63 @@
     sel.addEventListener('change',()=>loadChart(sel.value));
   }
 
+  function markerSeries(labels, markers, side){
+    const arr=new Array((labels||[]).length).fill(null);
+    (markers||[]).forEach(m=>{
+      if(String(m.side||'').toLowerCase()!==side) return;
+      const idx=Number(m.index);
+      if(Number.isFinite(idx) && idx>=0 && idx<arr.length) arr[idx]=Number(m.price);
+    });
+    return arr;
+  }
+
   async function loadChart(symbol){
     const r=await fetch(`/api/charts?symbol=${encodeURIComponent(symbol)}`);
     const j=await r.json();
     const ctx=document.getElementById('priceChart');
+    const labels=j.labels||[];
+    const closes=j.values||[];
+    const markers=j.markers||[];
+    const markerByIndex=new Map((markers||[]).map(m=>[Number(m.index),m]));
+
+    const buySeries=markerSeries(labels, markers, 'buy');
+    const sellSeries=markerSeries(labels, markers, 'sell');
+
     if(chart) chart.destroy();
-    chart=new Chart(ctx,{type:'line',data:{labels:j.labels,datasets:[{label:j.symbol,data:j.values,borderColor:'#2b6cb0',pointRadius:0}]}});
+    chart=new Chart(ctx,{
+      type:'line',
+      data:{
+        labels,
+        datasets:[
+          {label:`${j.symbol} close`,data:closes,borderColor:'#2b6cb0',pointRadius:0,tension:0.1},
+          {label:'BUY',data:buySeries,showLine:false,pointRadius:5,pointStyle:'triangle',pointBackgroundColor:'#16a34a',pointBorderColor:'#16a34a'},
+          {label:'SELL',data:sellSeries,showLine:false,pointRadius:5,pointStyle:'rectRot',pointBackgroundColor:'#dc2626',pointBorderColor:'#dc2626'}
+        ]
+      },
+      options:{
+        plugins:{
+          tooltip:{
+            callbacks:{
+              afterBody:(items)=>{
+                if(!items?.length) return '';
+                const idx=items[0].dataIndex;
+                const m=markerByIndex.get(Number(idx));
+                return m ? `signal: ${String(m.side||'').toUpperCase()} (${m.reason||'config crossover'})` : '';
+              }
+            }
+          }
+        }
+      }
+    });
+
+    const p=j.signal_params||{};
+    const note=(j.signal_note||'').trim();
+    const status=document.getElementById('priceMarkerStatus');
+    if(markers.length){
+      status.textContent=`Signals: BUY/SELL ${markers.length}건 · basis=${j.signal_basis||'config crossover'} · fast=${p.fast ?? '-'}, slow=${p.slow ?? '-'}${note ? ` · ${note}` : ''}`;
+    }else{
+      status.textContent=`Signals: (none) · basis=${j.signal_basis||'config crossover'} · fast=${p.fast ?? '-'}, slow=${p.slow ?? '-'}${note ? ` · ${note}` : ''}`;
+    }
   }
 
   async function refreshCharts(){

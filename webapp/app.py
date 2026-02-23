@@ -781,17 +781,123 @@ def save_config_file(payload: Dict = Body(...)):
     return {"ok": True}
 
 
+def _moving_average(values: list[float], window: int) -> list[float | None]:
+    if window <= 0:
+        return [None] * len(values)
+    out: list[float | None] = [None] * len(values)
+    running = 0.0
+    for i, v in enumerate(values):
+        running += float(v)
+        if i >= window:
+            running -= float(values[i - window])
+        if i >= window - 1:
+            out[i] = running / float(window)
+    return out
+
+
+def _signal_params_from_main_config() -> tuple[int, int]:
+    main_cfg = _load_main_cfg()
+    strategy = (main_cfg.get("strategy") or {}) if isinstance(main_cfg, dict) else {}
+
+    def _as_pos_int(v, default: int) -> int:
+        try:
+            n = int(v)
+            return n if n > 0 else default
+        except Exception:
+            return default
+
+    fast = _as_pos_int(strategy.get("ema_fast", 20), 20)
+    slow = _as_pos_int(strategy.get("ema_slow", 60), 60)
+    if fast == slow:
+        slow = fast + 1
+    return fast, slow
+
+
+def _build_price_signal_markers(labels: list[str], closes: list[float], fast: int, slow: int) -> list[dict]:
+    if len(closes) < max(fast, slow) + 2:
+        return []
+
+    fast_ma = _moving_average(closes, fast)
+    slow_ma = _moving_average(closes, slow)
+    markers: list[dict] = []
+
+    for idx in range(1, len(closes)):
+        pf, ps = fast_ma[idx - 1], slow_ma[idx - 1]
+        cf, cs = fast_ma[idx], slow_ma[idx]
+        if pf is None or ps is None or cf is None or cs is None:
+            continue
+
+        if pf <= ps and cf > cs:
+            markers.append({
+                "index": idx,
+                "label": labels[idx] if idx < len(labels) else "",
+                "price": float(closes[idx]),
+                "side": "buy",
+                "reason": f"ema_cross_up(fast={fast},slow={slow})",
+            })
+        elif pf >= ps and cf < cs:
+            markers.append({
+                "index": idx,
+                "label": labels[idx] if idx < len(labels) else "",
+                "price": float(closes[idx]),
+                "side": "sell",
+                "reason": f"ema_cross_down(fast={fast},slow={slow})",
+            })
+
+    return markers
+
+
 @app.get("/api/charts")
 def get_chart(symbol: str):
     cfg = config_mgr.load()
-    return chart_service.series(symbol, cfg.timeframe, cfg.history_limit)
+    fast, slow = _signal_params_from_main_config()
+
+    display_limit = int(cfg.history_limit)
+    calc_limit = max(display_limit + slow + 5, display_limit)
+    rows = storage.fetch_ohlcv(symbol, cfg.timeframe, limit=calc_limit)
+
+    labels_all = [dt.datetime.utcfromtimestamp(int(ts) / 1000).strftime("%Y-%m-%d") for ts, *_ in rows]
+    closes_all = [float(c) for _, _, _, _, c, _ in rows]
+    markers_all = _build_price_signal_markers(labels_all, closes_all, fast=fast, slow=slow)
+    insufficient_signal_data = len(closes_all) < (slow + 2)
+
+    trim_start = max(0, len(labels_all) - display_limit)
+    labels = labels_all[trim_start:]
+    closes = closes_all[trim_start:]
+
+    markers = []
+    for m in markers_all:
+        idx = int(m.get("index", -1))
+        if idx < trim_start:
+            continue
+        m2 = dict(m)
+        m2["index"] = idx - trim_start
+        markers.append(m2)
+
+    return {
+        "symbol": symbol,
+        "timeframe": cfg.timeframe,
+        "labels": labels,
+        "values": closes,
+        "signal_basis": "config.yaml strategy.ema_fast/ema_slow crossover",
+        "signal_params": {"fast": fast, "slow": slow},
+        "signal_note": f"Need at least {slow + 2} candles for reliable EMA crossover (current={len(closes_all)})" if insufficient_signal_data else "",
+        "markers": markers,
+    }
 
 
 @app.post("/api/charts/refresh")
 def refresh_charts(req: RefreshRequest = Body(default=RefreshRequest())):
     cfg = config_mgr.load()
-    chart_service.refresh_all(cfg, req.symbols)
-    return {"ok": True, "last_refresh": storage.get_meta("last_chart_refresh")}
+    fast, slow = _signal_params_from_main_config()
+    refresh_limit = max(int(cfg.history_limit) + slow + 5, int(cfg.history_limit))
+
+    targets = req.symbols or cfg.symbols
+    for s in targets:
+        chart_service.refresh_symbol(s, cfg.timeframe, refresh_limit)
+    storage.set_meta("last_chart_refresh", dt.datetime.utcnow().isoformat(timespec="seconds"))
+
+    return {"ok": True, "last_refresh": storage.get_meta("last_chart_refresh"), "signal_params": {"fast": fast, "slow": slow}}
 
 
 @app.post("/api/backtester/run")
