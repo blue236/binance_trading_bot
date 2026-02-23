@@ -372,11 +372,17 @@
   }
 
   async function refreshCharts(){
-    const symbols=[document.getElementById('symbol').value];
-    const r=await fetch('/api/charts/refresh',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbols})});
+    const symbol=document.getElementById('symbol').value;
+    const r=await fetch(`/api/charts/refresh2?symbol=${encodeURIComponent(symbol)}`);
     const j=await r.json();
+    if(!r.ok || (j && j.ok===false && !j.refreshed?.length)){
+      throw new Error((j?.errors && Object.values(j.errors).join('; ')) || j?.error || 'Refresh failed');
+    }
     document.getElementById('lastRefresh').textContent=j.last_refresh||'';
-    await loadChart(symbols[0]);
+    if(j?.errors && Object.keys(j.errors).length){
+      alert('Partial refresh completed: ' + Object.entries(j.errors).map(([k,v])=>`${k}: ${v}`).join(' | '));
+    }
+    await loadChart(symbol);
   }
 
   function setAiLog(text){
@@ -451,7 +457,10 @@
     payload.timeframe=document.getElementById('cfgTf').value;
     payload.history_limit=parseInt(document.getElementById('cfgLimit').value,10);
     payload.refresh_cron=document.getElementById('cfgCron').value;
-    await fetch('/api/config/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    const encoded=btoa(unescape(encodeURIComponent(JSON.stringify(payload))));
+    const r=await fetch('/api/config/save2',{method:'POST',headers:{'x-btb-config':encoded}});
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok || j?.ok===false) throw new Error((j?.error?.message || j?.error) || 'Save failed');
     alert('Web config saved. Reload page recommended.');
   }
 

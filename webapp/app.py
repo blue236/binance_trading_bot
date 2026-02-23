@@ -9,7 +9,9 @@ import json
 import urllib.parse
 import urllib.request
 import time
+import base64
 import datetime as dt
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from pathlib import Path
 from typing import Dict
 
@@ -17,6 +19,7 @@ import yaml
 from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI, Body, Request
 from fastapi.responses import HTMLResponse, FileResponse, RedirectResponse, JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -85,23 +88,26 @@ def _is_valid_session(token: str | None) -> bool:
     return token == _make_session_token(username) and username == _auth_user()
 
 
-@app.middleware("http")
-async def auth_middleware(request: Request, call_next):
-    if not _auth_enabled():
-        return await call_next(request)
+class AuthMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        if not _auth_enabled():
+            return await call_next(request)
 
-    path = request.url.path or "/"
-    public_prefixes = ("/static", "/plots", "/login")
-    if path.startswith(public_prefixes):
-        return await call_next(request)
+        path = request.url.path or "/"
+        public_prefixes = ("/static", "/plots", "/login")
+        if path.startswith(public_prefixes):
+            return await call_next(request)
 
-    token = request.cookies.get(_session_cookie_name())
-    if _is_valid_session(token):
-        return await call_next(request)
+        token = request.cookies.get(_session_cookie_name())
+        if _is_valid_session(token):
+            return await call_next(request)
 
-    if path.startswith("/api"):
-        return JSONResponse(status_code=401, content={"ok": False, "error": "unauthorized"})
-    return RedirectResponse(url="/login", status_code=302)
+        if path.startswith("/api"):
+            return JSONResponse(status_code=401, content={"ok": False, "error": "unauthorized"})
+        return RedirectResponse(url="/login", status_code=302)
+
+
+app.add_middleware(AuthMiddleware)
 
 
 def parse_cron(expr: str):
@@ -781,6 +787,22 @@ def save_config_file(payload: Dict = Body(...)):
     return {"ok": True}
 
 
+@app.post("/api/config/save2")
+async def save_config_file_v2(request: Request):
+    # Body parsing fallback-free route: config payload comes from base64 header.
+    encoded = (request.headers.get("x-btb-config") or "").strip()
+    if not encoded:
+        return _error_response("MISSING_CONFIG", "x-btb-config header is required", 400)
+    try:
+        raw = base64.b64decode(encoded + "===").decode("utf-8", errors="strict")
+        payload = json.loads(raw)
+        cfg = UIConfig(**(payload or {}))
+        config_mgr.save(cfg)
+        return {"ok": True}
+    except Exception as e:
+        return _error_response("INVALID_CONFIG", str(e), 400)
+
+
 def _moving_average(values: list[float], window: int) -> list[float | None]:
     if window <= 0:
         return [None] * len(values)
@@ -893,11 +915,36 @@ def refresh_charts(req: RefreshRequest = Body(default=RefreshRequest())):
     refresh_limit = max(int(cfg.history_limit) + slow + 5, int(cfg.history_limit))
 
     targets = req.symbols or cfg.symbols
-    for s in targets:
-        chart_service.refresh_symbol(s, cfg.timeframe, refresh_limit)
+    refreshed: list[str] = []
+    errors: dict[str, str] = {}
+
+    for sym in targets:
+        try:
+            with ThreadPoolExecutor(max_workers=1) as ex:
+                fut = ex.submit(chart_service.refresh_symbol, sym, cfg.timeframe, refresh_limit)
+                fut.result(timeout=20)
+            refreshed.append(sym)
+        except FuturesTimeoutError:
+            errors[sym] = "timeout while fetching OHLCV"
+        except Exception as e:
+            errors[sym] = str(e)
+
     storage.set_meta("last_chart_refresh", dt.datetime.utcnow().isoformat(timespec="seconds"))
 
-    return {"ok": True, "last_refresh": storage.get_meta("last_chart_refresh"), "signal_params": {"fast": fast, "slow": slow}}
+    return {
+        "ok": len(errors) == 0,
+        "last_refresh": storage.get_meta("last_chart_refresh"),
+        "signal_params": {"fast": fast, "slow": slow},
+        "refreshed": refreshed,
+        "errors": errors,
+    }
+
+
+@app.get("/api/charts/refresh2")
+def refresh_charts_v2(symbol: str | None = None):
+    cfg = config_mgr.load()
+    req = RefreshRequest(symbols=[symbol] if symbol else None)
+    return refresh_charts(req)
 
 
 @app.post("/api/backtester/run")
