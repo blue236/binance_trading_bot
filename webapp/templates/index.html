@@ -14,6 +14,7 @@
     .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
     .card{background:white;border-radius:12px;padding:16px;margin-bottom:16px;box-shadow:0 2px 8px rgba(0,0,0,.06)}
     button{padding:10px 12px;border:0;border-radius:8px;background:#2b6cb0;color:#fff;cursor:pointer;min-height:44px}
+    button.is-busy{opacity:.75;cursor:wait}
     input,select,textarea{padding:10px;border:1px solid #ddd;border-radius:8px;min-height:44px;max-width:100%}
     textarea{width:100%;min-height:320px;font-family:monospace}
     pre{background:#111;color:#ddd;padding:12px;border-radius:8px;overflow:auto;white-space:pre-wrap}
@@ -176,6 +177,32 @@
 <script>
   const initialConfig = {{ config | tojson }};
   let chart;
+
+  async function withButtonProgress(buttonOrId, busyText, action){
+    const btn = typeof buttonOrId === 'string' ? document.getElementById(buttonOrId) : buttonOrId;
+    if(!btn || btn.dataset.busy==='1') return;
+    const originalText = btn.textContent;
+    const wasDisabled = btn.disabled;
+
+    btn.dataset.busy='1';
+    btn.disabled=true;
+    btn.classList.add('is-busy');
+    btn.setAttribute('aria-busy','true');
+    if(busyText) btn.textContent=busyText;
+
+    try {
+      await action();
+    } catch (e) {
+      console.error(e);
+      alert('Request failed: ' + (e?.message || e));
+    } finally {
+      btn.dataset.busy='0';
+      btn.classList.remove('is-busy');
+      btn.removeAttribute('aria-busy');
+      btn.textContent=originalText;
+      if(!wasDisabled) btn.disabled=false;
+    }
+  }
 
   function setupInteractiveUi(){
     const helpText=document.getElementById('helpText');
@@ -591,12 +618,7 @@
   }
 
   async function runLegacyBacktester(){
-    const btn=document.getElementById('legacyRun');
     const status=document.getElementById('legacyStatus');
-    if(btn.disabled) return;
-    btn.disabled=true;
-    const prevText=btn.textContent;
-    btn.textContent='Processing...';
     status.textContent='Running legacy backtester...';
 
     try {
@@ -620,9 +642,7 @@
     } catch (e) {
       status.textContent='Failed';
       document.getElementById('legacyOut').textContent='Request failed: ' + e;
-    } finally {
-      btn.disabled=false;
-      btn.textContent=prevText;
+      throw e;
     }
   }
 
@@ -634,21 +654,21 @@
     };
   });
 
-  document.getElementById('refreshBtn').onclick=refreshCharts;
+  document.getElementById('refreshBtn').onclick=()=>withButtonProgress('refreshBtn','Refreshing...',refreshCharts);
   document.getElementById('configBtn').onclick=()=>{const p=document.getElementById('configPanel');p.style.display=p.style.display==='none'?'block':'none';};
-  document.getElementById('cfgLoad').onclick=loadConfig;
-  document.getElementById('cfgSave').onclick=saveConfig;
-  document.getElementById('btUnifiedRun').onclick=runBacktest;
-  document.getElementById('legacyRun').onclick=runLegacyBacktester;
-  document.getElementById('aiStart').onclick=aiStart;
-  document.getElementById('aiStop').onclick=aiStop;
-  document.getElementById('aiLogRefresh').onclick=()=>refreshAiLogs();
-  document.getElementById('aiLogNew').onclick=aiLogNew;
+  document.getElementById('cfgLoad').onclick=()=>withButtonProgress('cfgLoad','Loading...',loadConfig);
+  document.getElementById('cfgSave').onclick=()=>withButtonProgress('cfgSave','Saving...',saveConfig);
+  document.getElementById('btUnifiedRun').onclick=()=>withButtonProgress('btUnifiedRun','Running...',runBacktest);
+  document.getElementById('legacyRun').onclick=()=>withButtonProgress('legacyRun','Processing...',runLegacyBacktester);
+  document.getElementById('aiStart').onclick=()=>withButtonProgress('aiStart','Starting...',aiStart);
+  document.getElementById('aiStop').onclick=()=>withButtonProgress('aiStop','Stopping...',aiStop);
+  document.getElementById('aiLogRefresh').onclick=()=>withButtonProgress('aiLogRefresh','Refreshing...',()=>refreshAiLogs());
+  document.getElementById('aiLogNew').onclick=()=>withButtonProgress('aiLogNew','Creating...',aiLogNew);
   document.getElementById('aiLogDownload').onclick=()=>{ window.location.href='/api/ai/logs/download'; };
   document.getElementById('aiLogLines').onchange=()=>refreshAiLogs();
-  document.getElementById('aiCfgReload').onclick=reloadAiCfg;
-  document.getElementById('aiCfgSave').onclick=saveAiCfg;
-  document.getElementById('secSave').onclick=saveSecrets;
+  document.getElementById('aiCfgReload').onclick=()=>withButtonProgress('aiCfgReload','Loading...',reloadAiCfg);
+  document.getElementById('aiCfgSave').onclick=()=>withButtonProgress('aiCfgSave','Saving...',saveAiCfg);
+  document.getElementById('secSave').onclick=()=>withButtonProgress('secSave','Saving...',saveSecrets);
 
   setupInteractiveUi();
   setupSymbols();
