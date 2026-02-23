@@ -744,8 +744,9 @@ def logout():
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request):
     cfg = config_mgr.load()
-    symbol = cfg.symbols[0] if cfg.symbols else "BTC/USDT"
-    series = chart_service.series(symbol, cfg.timeframe, cfg.history_limit)
+    runtime = _chart_runtime_params()
+    symbol = runtime["symbols"][0] if runtime["symbols"] else "BTC/USDT"
+    series = chart_service.series(symbol, runtime["timeframe"], runtime["history_limit"])
     return templates.TemplateResponse(
         "index.html",
         {
@@ -817,6 +818,21 @@ def _moving_average(values: list[float], window: int) -> list[float | None]:
     return out
 
 
+def _chart_runtime_params() -> dict:
+    web_cfg = config_mgr.load()
+    main_cfg = _load_main_cfg()
+    general = (main_cfg.get("general") or {}) if isinstance(main_cfg, dict) else {}
+
+    timeframe = str(general.get("timeframe_signal") or web_cfg.timeframe)
+    symbols = list(general.get("symbols") or web_cfg.symbols)
+    history_limit = int(web_cfg.history_limit)
+    return {
+        "timeframe": timeframe,
+        "symbols": symbols,
+        "history_limit": history_limit,
+    }
+
+
 def _signal_params_from_main_config() -> tuple[int, int]:
     main_cfg = _load_main_cfg()
     strategy = (main_cfg.get("strategy") or {}) if isinstance(main_cfg, dict) else {}
@@ -871,12 +887,12 @@ def _build_price_signal_markers(labels: list[str], closes: list[float], fast: in
 
 @app.get("/api/charts")
 def get_chart(symbol: str):
-    cfg = config_mgr.load()
+    runtime = _chart_runtime_params()
     fast, slow = _signal_params_from_main_config()
 
-    display_limit = int(cfg.history_limit)
+    display_limit = int(runtime["history_limit"])
     calc_limit = max(display_limit + slow + 5, display_limit)
-    rows = storage.fetch_ohlcv(symbol, cfg.timeframe, limit=calc_limit)
+    rows = storage.fetch_ohlcv(symbol, runtime["timeframe"], limit=calc_limit)
 
     labels_all = [dt.datetime.utcfromtimestamp(int(ts) / 1000).strftime("%Y-%m-%d") for ts, *_ in rows]
     closes_all = [float(c) for _, _, _, _, c, _ in rows]
@@ -898,7 +914,7 @@ def get_chart(symbol: str):
 
     return {
         "symbol": symbol,
-        "timeframe": cfg.timeframe,
+        "timeframe": runtime["timeframe"],
         "labels": labels,
         "values": closes,
         "signal_basis": "config.yaml strategy.ema_fast/ema_slow crossover",
@@ -910,18 +926,18 @@ def get_chart(symbol: str):
 
 @app.post("/api/charts/refresh")
 def refresh_charts(req: RefreshRequest = Body(default=RefreshRequest())):
-    cfg = config_mgr.load()
+    runtime = _chart_runtime_params()
     fast, slow = _signal_params_from_main_config()
-    refresh_limit = max(int(cfg.history_limit) + slow + 5, int(cfg.history_limit))
+    refresh_limit = max(int(runtime["history_limit"]) + slow + 5, int(runtime["history_limit"]))
 
-    targets = req.symbols or cfg.symbols
+    targets = req.symbols or runtime["symbols"]
     refreshed: list[str] = []
     errors: dict[str, str] = {}
 
     for sym in targets:
         try:
             with ThreadPoolExecutor(max_workers=1) as ex:
-                fut = ex.submit(chart_service.refresh_symbol, sym, cfg.timeframe, refresh_limit)
+                fut = ex.submit(chart_service.refresh_symbol, sym, runtime["timeframe"], refresh_limit)
                 fut.result(timeout=20)
             refreshed.append(sym)
         except FuturesTimeoutError:
