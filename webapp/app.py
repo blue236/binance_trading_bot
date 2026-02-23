@@ -15,9 +15,8 @@ from typing import Dict
 
 import yaml
 from apscheduler.schedulers.background import BackgroundScheduler
-from fastapi import FastAPI, Body, Request, Form
+from fastapi import FastAPI, Body, Request
 from fastapi.responses import HTMLResponse, FileResponse, RedirectResponse, JSONResponse
-from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -86,26 +85,23 @@ def _is_valid_session(token: str | None) -> bool:
     return token == _make_session_token(username) and username == _auth_user()
 
 
-class AuthMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
-        if not _auth_enabled():
-            return await call_next(request)
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    if not _auth_enabled():
+        return await call_next(request)
 
-        path = request.url.path or "/"
-        public_prefixes = ("/static", "/plots", "/login")
-        if path.startswith(public_prefixes):
-            return await call_next(request)
+    path = request.url.path or "/"
+    public_prefixes = ("/static", "/plots", "/login")
+    if path.startswith(public_prefixes):
+        return await call_next(request)
 
-        token = request.cookies.get(_session_cookie_name())
-        if _is_valid_session(token):
-            return await call_next(request)
+    token = request.cookies.get(_session_cookie_name())
+    if _is_valid_session(token):
+        return await call_next(request)
 
-        if path.startswith("/api"):
-            return JSONResponse(status_code=401, content={"ok": False, "error": "unauthorized"})
-        return RedirectResponse(url="/login", status_code=302)
-
-
-app.add_middleware(AuthMiddleware)
+    if path.startswith("/api"):
+        return JSONResponse(status_code=401, content={"ok": False, "error": "unauthorized"})
+    return RedirectResponse(url="/login", status_code=302)
 
 
 def parse_cron(expr: str):
@@ -716,12 +712,17 @@ def login_page(request: Request, error: str | None = None):
 
 
 @app.post("/login")
-def login_submit(request: Request, username: str = Form(...), password: str = Form(...)):
+def login_submit(request: Request):
     if not _auth_enabled():
-        return RedirectResponse(url="/", status_code=302)
+        return JSONResponse({"ok": True, "redirect": "/"})
+
+    username = (request.headers.get("x-btb-user") or "").strip()
+    password = request.headers.get("x-btb-pass") or ""
+
     if username != _auth_user() or password != _auth_pass() or not _auth_pass():
-        return templates.TemplateResponse("login.html", {"request": request, "error": "Invalid credentials"}, status_code=401)
-    resp = RedirectResponse(url="/", status_code=302)
+        return JSONResponse({"ok": False, "error": "Invalid credentials"}, status_code=401)
+
+    resp = JSONResponse({"ok": True, "redirect": "/"})
     secure_cookie = os.environ.get("BTB_WEB_COOKIE_SECURE", "1").strip() not in ("0", "false", "False")
     resp.set_cookie(_session_cookie_name(), _make_session_token(username), httponly=True, samesite="lax", secure=secure_cookie, max_age=60 * 60 * 12)
     return resp
