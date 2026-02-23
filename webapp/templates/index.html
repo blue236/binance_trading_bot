@@ -178,11 +178,12 @@
   const initialConfig = {{ config | tojson }};
   let chart;
 
-  async function withButtonProgress(buttonOrId, busyText, action){
+  async function withButtonProgress(buttonOrId, busyText, action, opts={}){
     const btn = typeof buttonOrId === 'string' ? document.getElementById(buttonOrId) : buttonOrId;
     if(!btn || btn.dataset.busy==='1') return;
     const originalText = btn.textContent;
     const wasDisabled = btn.disabled;
+    const timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : 45000;
 
     btn.dataset.busy='1';
     btn.disabled=true;
@@ -190,12 +191,18 @@
     btn.setAttribute('aria-busy','true');
     if(busyText) btn.textContent=busyText;
 
+    let timeoutId;
+    const timeoutPromise = new Promise((_, reject) => {
+      timeoutId = setTimeout(() => reject(new Error(`Timed out after ${Math.round(timeoutMs/1000)}s`)), timeoutMs);
+    });
+
     try {
-      await action();
+      await Promise.race([Promise.resolve().then(() => action()), timeoutPromise]);
     } catch (e) {
       console.error(e);
       alert('Request failed: ' + (e?.message || e));
     } finally {
+      clearTimeout(timeoutId);
       btn.dataset.busy='0';
       btn.classList.remove('is-busy');
       btn.removeAttribute('aria-busy');

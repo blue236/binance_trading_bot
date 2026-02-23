@@ -10,7 +10,8 @@ from .models import UIConfig
 class ChartService:
     def __init__(self, storage: Storage):
         self.storage = storage
-        self.exchange = ccxt.binance({"enableRateLimit": True})
+        # Set explicit HTTP timeout so UI actions do not hang indefinitely on slow exchange responses.
+        self.exchange = ccxt.binance({"enableRateLimit": True, "timeout": 15000})
 
     def refresh_symbol(self, symbol: str, timeframe: str, limit: int):
         data = self.exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
