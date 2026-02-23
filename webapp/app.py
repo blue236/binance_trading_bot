@@ -818,9 +818,27 @@ def _moving_average(values: list[float], window: int) -> list[float | None]:
     return out
 
 
+def _effective_main_config() -> dict:
+    cfg = _load_main_cfg()
+    if not isinstance(cfg, dict):
+        return {}
+
+    if bool((cfg.get("general") or {}).get("aggressive_mode", False)):
+        agg = cfg.get("aggressive") or {}
+        if isinstance(agg, dict):
+            out = dict(cfg)
+            for section in ("general", "risk", "strategy"):
+                base_sec = dict((cfg.get(section) or {})) if isinstance(cfg.get(section), dict) else {}
+                agg_sec = dict((agg.get(section) or {})) if isinstance(agg.get(section), dict) else {}
+                merged = {**base_sec, **agg_sec}
+                out[section] = merged
+            return out
+    return cfg
+
+
 def _chart_runtime_params() -> dict:
     web_cfg = config_mgr.load()
-    main_cfg = _load_main_cfg()
+    main_cfg = _effective_main_config()
     general = (main_cfg.get("general") or {}) if isinstance(main_cfg, dict) else {}
 
     timeframe = str(general.get("timeframe_signal") or web_cfg.timeframe)
@@ -834,7 +852,7 @@ def _chart_runtime_params() -> dict:
 
 
 def _signal_params_from_main_config() -> tuple[int, int]:
-    main_cfg = _load_main_cfg()
+    main_cfg = _effective_main_config()
     strategy = (main_cfg.get("strategy") or {}) if isinstance(main_cfg, dict) else {}
 
     def _as_pos_int(v, default: int) -> int:
@@ -917,7 +935,7 @@ def get_chart(symbol: str):
         "timeframe": runtime["timeframe"],
         "labels": labels,
         "values": closes,
-        "signal_basis": "config.yaml strategy.ema_fast/ema_slow crossover",
+        "signal_basis": f"config.yaml ({'aggressive' if bool((_load_main_cfg().get('general') or {}).get('aggressive_mode', False)) else 'normal'}) strategy.ema_fast/ema_slow crossover",
         "signal_params": {"fast": fast, "slow": slow},
         "signal_note": f"Need at least {slow + 2} candles for reliable EMA crossover (current={len(closes_all)})" if insufficient_signal_data else "",
         "markers": markers,
