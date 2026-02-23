@@ -1028,6 +1028,19 @@ def ai_config_save(payload: Dict = Body(...)):
     return {"ok": True}
 
 
+@app.post("/api/ai/config2")
+async def ai_config_save_v2(request: Request):
+    encoded = (request.headers.get("x-btb-ai-config") or "").strip()
+    if not encoded:
+        return _error_response("MISSING_CONFIG", "x-btb-ai-config header is required", 400)
+    try:
+        raw = base64.b64decode(encoded + "===").decode("utf-8", errors="strict")
+        _save_ai_config_text(raw)
+        return {"ok": True}
+    except Exception as e:
+        return _error_response("INVALID_CONFIG", str(e), 400)
+
+
 @app.get("/api/ai/secrets")
 def ai_secrets_get():
     return {"ok": True, "status": _secrets_status()}
@@ -1040,6 +1053,22 @@ def ai_secrets_save(payload: Dict = Body(...)):
     except ValueError as e:
         return {"ok": False, "error": str(e)}
     return {"ok": True, "status": _secrets_status()}
+
+
+@app.post("/api/ai/secrets2")
+async def ai_secrets_save_v2(request: Request):
+    encoded = (request.headers.get("x-btb-secrets") or "").strip()
+    if not encoded:
+        return _error_response("MISSING_SECRETS", "x-btb-secrets header is required", 400)
+    try:
+        raw = base64.b64decode(encoded + "===").decode("utf-8", errors="strict")
+        payload = json.loads(raw)
+        _save_secrets(payload or {})
+        return {"ok": True, "status": _secrets_status()}
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+    except Exception as e:
+        return _error_response("INVALID_SECRETS", str(e), 400)
 
 
 @app.post("/api/backtest/run")

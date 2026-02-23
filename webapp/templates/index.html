@@ -471,7 +471,10 @@
   }
   async function saveAiCfg(){
     const text=document.getElementById('aiCfgRaw').value;
-    await fetch('/api/ai/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text})});
+    const encoded=btoa(unescape(encodeURIComponent(text || '')));
+    const r=await fetch('/api/ai/config2',{method:'POST',headers:{'x-btb-ai-config':encoded}});
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok || j?.ok===false) throw new Error((j?.error?.message || j?.error) || 'Save config.yaml failed');
     alert('config.yaml saved for main.py (secrets stripped)');
   }
 
@@ -484,11 +487,12 @@
       telegram_bot_token:document.getElementById('secTgToken').value,
       telegram_chat_id:document.getElementById('secTgChat').value,
     };
-    const r=await fetch('/api/ai/secrets',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-    const j=await r.json();
-    if(!j.ok){
-      status.textContent='Failed: ' + (j.error || 'unknown error');
-      return;
+    const encoded=btoa(unescape(encodeURIComponent(JSON.stringify(payload))));
+    const r=await fetch('/api/ai/secrets2',{method:'POST',headers:{'x-btb-secrets':encoded}});
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok || !j.ok){
+      status.textContent='Failed: ' + ((j?.error?.message || j?.error) || 'unknown error');
+      throw new Error((j?.error?.message || j?.error) || 'Save secrets failed');
     }
     document.getElementById('secMasked').textContent=JSON.stringify(j.status||{},null,2);
     ['secApiKey','secApiSecret','secTgToken','secTgChat'].forEach(id=>document.getElementById(id).value='');
