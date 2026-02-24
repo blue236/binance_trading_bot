@@ -9,13 +9,15 @@ import json
 import urllib.parse
 import urllib.request
 import time
+import base64
 import datetime as dt
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from pathlib import Path
 from typing import Dict
 
 import yaml
 from apscheduler.schedulers.background import BackgroundScheduler
-from fastapi import FastAPI, Body, Request, Form
+from fastapi import FastAPI, Body, Request
 from fastapi.responses import HTMLResponse, FileResponse, RedirectResponse, JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -716,12 +718,17 @@ def login_page(request: Request, error: str | None = None):
 
 
 @app.post("/login")
-def login_submit(request: Request, username: str = Form(...), password: str = Form(...)):
+def login_submit(request: Request):
     if not _auth_enabled():
-        return RedirectResponse(url="/", status_code=302)
+        return JSONResponse({"ok": True, "redirect": "/"})
+
+    username = (request.headers.get("x-btb-user") or "").strip()
+    password = request.headers.get("x-btb-pass") or ""
+
     if username != _auth_user() or password != _auth_pass() or not _auth_pass():
-        return templates.TemplateResponse("login.html", {"request": request, "error": "Invalid credentials"}, status_code=401)
-    resp = RedirectResponse(url="/", status_code=302)
+        return JSONResponse({"ok": False, "error": "Invalid credentials"}, status_code=401)
+
+    resp = JSONResponse({"ok": True, "redirect": "/"})
     secure_cookie = os.environ.get("BTB_WEB_COOKIE_SECURE", "1").strip() not in ("0", "false", "False")
     resp.set_cookie(_session_cookie_name(), _make_session_token(username), httponly=True, samesite="lax", secure=secure_cookie, max_age=60 * 60 * 12)
     return resp
@@ -737,8 +744,9 @@ def logout():
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request):
     cfg = config_mgr.load()
-    symbol = cfg.symbols[0] if cfg.symbols else "BTC/USDT"
-    series = chart_service.series(symbol, cfg.timeframe, cfg.history_limit)
+    runtime = _chart_runtime_params()
+    symbol = runtime["symbols"][0] if runtime["symbols"] else "BTC/USDT"
+    series = chart_service.series(symbol, runtime["timeframe"], runtime["history_limit"])
     return templates.TemplateResponse(
         "index.html",
         {
@@ -780,17 +788,197 @@ def save_config_file(payload: Dict = Body(...)):
     return {"ok": True}
 
 
+@app.post("/api/config/save2")
+async def save_config_file_v2(request: Request):
+    # Body parsing fallback-free route: config payload comes from base64 header.
+    encoded = (request.headers.get("x-btb-config") or "").strip()
+    if not encoded:
+        return _error_response("MISSING_CONFIG", "x-btb-config header is required", 400)
+    try:
+        raw = base64.b64decode(encoded + "===").decode("utf-8", errors="strict")
+        payload = json.loads(raw)
+        cfg = UIConfig(**(payload or {}))
+        config_mgr.save(cfg)
+        return {"ok": True}
+    except Exception as e:
+        return _error_response("INVALID_CONFIG", str(e), 400)
+
+
+def _moving_average(values: list[float], window: int) -> list[float | None]:
+    if window <= 0:
+        return [None] * len(values)
+    out: list[float | None] = [None] * len(values)
+    running = 0.0
+    for i, v in enumerate(values):
+        running += float(v)
+        if i >= window:
+            running -= float(values[i - window])
+        if i >= window - 1:
+            out[i] = running / float(window)
+    return out
+
+
+def _effective_main_config() -> dict:
+    cfg = _load_main_cfg()
+    if not isinstance(cfg, dict):
+        return {}
+
+    if bool((cfg.get("general") or {}).get("aggressive_mode", False)):
+        agg = cfg.get("aggressive") or {}
+        if isinstance(agg, dict):
+            out = dict(cfg)
+            for section in ("general", "risk", "strategy"):
+                base_sec = dict((cfg.get(section) or {})) if isinstance(cfg.get(section), dict) else {}
+                agg_sec = dict((agg.get(section) or {})) if isinstance(agg.get(section), dict) else {}
+                merged = {**base_sec, **agg_sec}
+                out[section] = merged
+            return out
+    return cfg
+
+
+def _chart_runtime_params() -> dict:
+    web_cfg = config_mgr.load()
+    main_cfg = _effective_main_config()
+    general = (main_cfg.get("general") or {}) if isinstance(main_cfg, dict) else {}
+
+    timeframe = str(general.get("timeframe_signal") or web_cfg.timeframe)
+    symbols = list(general.get("symbols") or web_cfg.symbols)
+    history_limit = int(web_cfg.history_limit)
+    return {
+        "timeframe": timeframe,
+        "symbols": symbols,
+        "history_limit": history_limit,
+    }
+
+
+def _signal_params_from_main_config() -> tuple[int, int]:
+    main_cfg = _effective_main_config()
+    strategy = (main_cfg.get("strategy") or {}) if isinstance(main_cfg, dict) else {}
+
+    def _as_pos_int(v, default: int) -> int:
+        try:
+            n = int(v)
+            return n if n > 0 else default
+        except Exception:
+            return default
+
+    fast = _as_pos_int(strategy.get("ema_fast", 20), 20)
+    slow = _as_pos_int(strategy.get("ema_slow", 60), 60)
+    if fast == slow:
+        slow = fast + 1
+    return fast, slow
+
+
+def _build_price_signal_markers(labels: list[str], closes: list[float], fast: int, slow: int) -> list[dict]:
+    if len(closes) < max(fast, slow) + 2:
+        return []
+
+    fast_ma = _moving_average(closes, fast)
+    slow_ma = _moving_average(closes, slow)
+    markers: list[dict] = []
+
+    for idx in range(1, len(closes)):
+        pf, ps = fast_ma[idx - 1], slow_ma[idx - 1]
+        cf, cs = fast_ma[idx], slow_ma[idx]
+        if pf is None or ps is None or cf is None or cs is None:
+            continue
+
+        if pf <= ps and cf > cs:
+            markers.append({
+                "index": idx,
+                "label": labels[idx] if idx < len(labels) else "",
+                "price": float(closes[idx]),
+                "side": "buy",
+                "reason": f"ema_cross_up(fast={fast},slow={slow})",
+            })
+        elif pf >= ps and cf < cs:
+            markers.append({
+                "index": idx,
+                "label": labels[idx] if idx < len(labels) else "",
+                "price": float(closes[idx]),
+                "side": "sell",
+                "reason": f"ema_cross_down(fast={fast},slow={slow})",
+            })
+
+    return markers
+
+
 @app.get("/api/charts")
 def get_chart(symbol: str):
-    cfg = config_mgr.load()
-    return chart_service.series(symbol, cfg.timeframe, cfg.history_limit)
+    runtime = _chart_runtime_params()
+    fast, slow = _signal_params_from_main_config()
+
+    display_limit = int(runtime["history_limit"])
+    calc_limit = max(display_limit + slow + 5, display_limit)
+    rows = storage.fetch_ohlcv(symbol, runtime["timeframe"], limit=calc_limit)
+
+    labels_all = [dt.datetime.utcfromtimestamp(int(ts) / 1000).strftime("%Y-%m-%d") for ts, *_ in rows]
+    closes_all = [float(c) for _, _, _, _, c, _ in rows]
+    markers_all = _build_price_signal_markers(labels_all, closes_all, fast=fast, slow=slow)
+    insufficient_signal_data = len(closes_all) < (slow + 2)
+
+    trim_start = max(0, len(labels_all) - display_limit)
+    labels = labels_all[trim_start:]
+    closes = closes_all[trim_start:]
+
+    markers = []
+    for m in markers_all:
+        idx = int(m.get("index", -1))
+        if idx < trim_start:
+            continue
+        m2 = dict(m)
+        m2["index"] = idx - trim_start
+        markers.append(m2)
+
+    return {
+        "symbol": symbol,
+        "timeframe": runtime["timeframe"],
+        "labels": labels,
+        "values": closes,
+        "signal_basis": f"config.yaml ({'aggressive' if bool((_load_main_cfg().get('general') or {}).get('aggressive_mode', False)) else 'normal'}) strategy.ema_fast/ema_slow crossover",
+        "signal_params": {"fast": fast, "slow": slow},
+        "signal_note": f"Need at least {slow + 2} candles for reliable EMA crossover (current={len(closes_all)})" if insufficient_signal_data else "",
+        "markers": markers,
+    }
 
 
 @app.post("/api/charts/refresh")
 def refresh_charts(req: RefreshRequest = Body(default=RefreshRequest())):
+    runtime = _chart_runtime_params()
+    fast, slow = _signal_params_from_main_config()
+    refresh_limit = max(int(runtime["history_limit"]) + slow + 5, int(runtime["history_limit"]))
+
+    targets = req.symbols or runtime["symbols"]
+    refreshed: list[str] = []
+    errors: dict[str, str] = {}
+
+    for sym in targets:
+        try:
+            with ThreadPoolExecutor(max_workers=1) as ex:
+                fut = ex.submit(chart_service.refresh_symbol, sym, runtime["timeframe"], refresh_limit)
+                fut.result(timeout=20)
+            refreshed.append(sym)
+        except FuturesTimeoutError:
+            errors[sym] = "timeout while fetching OHLCV"
+        except Exception as e:
+            errors[sym] = str(e)
+
+    storage.set_meta("last_chart_refresh", dt.datetime.utcnow().isoformat(timespec="seconds"))
+
+    return {
+        "ok": len(errors) == 0,
+        "last_refresh": storage.get_meta("last_chart_refresh"),
+        "signal_params": {"fast": fast, "slow": slow},
+        "refreshed": refreshed,
+        "errors": errors,
+    }
+
+
+@app.get("/api/charts/refresh2")
+def refresh_charts_v2(symbol: str | None = None):
     cfg = config_mgr.load()
-    chart_service.refresh_all(cfg, req.symbols)
-    return {"ok": True, "last_refresh": storage.get_meta("last_chart_refresh")}
+    req = RefreshRequest(symbols=[symbol] if symbol else None)
+    return refresh_charts(req)
 
 
 @app.post("/api/backtester/run")
@@ -874,6 +1062,19 @@ def ai_config_save(payload: Dict = Body(...)):
     return {"ok": True}
 
 
+@app.post("/api/ai/config2")
+async def ai_config_save_v2(request: Request):
+    encoded = (request.headers.get("x-btb-ai-config") or "").strip()
+    if not encoded:
+        return _error_response("MISSING_CONFIG", "x-btb-ai-config header is required", 400)
+    try:
+        raw = base64.b64decode(encoded + "===").decode("utf-8", errors="strict")
+        _save_ai_config_text(raw)
+        return {"ok": True}
+    except Exception as e:
+        return _error_response("INVALID_CONFIG", str(e), 400)
+
+
 @app.get("/api/ai/secrets")
 def ai_secrets_get():
     return {"ok": True, "status": _secrets_status()}
@@ -886,6 +1087,22 @@ def ai_secrets_save(payload: Dict = Body(...)):
     except ValueError as e:
         return {"ok": False, "error": str(e)}
     return {"ok": True, "status": _secrets_status()}
+
+
+@app.post("/api/ai/secrets2")
+async def ai_secrets_save_v2(request: Request):
+    encoded = (request.headers.get("x-btb-secrets") or "").strip()
+    if not encoded:
+        return _error_response("MISSING_SECRETS", "x-btb-secrets header is required", 400)
+    try:
+        raw = base64.b64decode(encoded + "===").decode("utf-8", errors="strict")
+        payload = json.loads(raw)
+        _save_secrets(payload or {})
+        return {"ok": True, "status": _secrets_status()}
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+    except Exception as e:
+        return _error_response("INVALID_SECRETS", str(e), 400)
 
 
 @app.post("/api/backtest/run")

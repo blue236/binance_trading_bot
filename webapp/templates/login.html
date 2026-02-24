@@ -13,12 +13,45 @@
   </style>
 </head>
 <body>
-  <form class="card" method="post" action="/login">
+  <form class="card" id="loginForm" autocomplete="off">
     <h3>Binance Trading Bot Login</h3>
-    <input name="username" placeholder="Username" required />
-    <input name="password" type="password" placeholder="Password" required />
-    <button type="submit">Login</button>
-    {% if error %}<div class="err">{{ error }}</div>{% endif %}
+    <input id="username" name="username" placeholder="Username" required />
+    <input id="password" name="password" type="password" placeholder="Password" required />
+    <button id="loginBtn" type="submit">Login</button>
+    <div class="err" id="loginErr">{% if error %}{{ error }}{% endif %}</div>
   </form>
+
+  <script>
+    const form = document.getElementById('loginForm');
+    const btn = document.getElementById('loginBtn');
+    const err = document.getElementById('loginErr');
+    form.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      err.textContent = '';
+      btn.disabled = true;
+      const u = document.getElementById('username').value || '';
+      const p = document.getElementById('password').value || '';
+      try {
+        const r = await fetch('/login', {
+          method: 'POST',
+          headers: {
+            'x-btb-user': u,
+            'x-btb-pass': p,
+          },
+          credentials: 'same-origin',
+        });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || !j.ok) {
+          err.textContent = (j && j.error) ? j.error : 'Login failed';
+          return;
+        }
+        window.location.href = j.redirect || '/';
+      } catch (e) {
+        err.textContent = 'Login request failed';
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  </script>
 </body>
 </html>
