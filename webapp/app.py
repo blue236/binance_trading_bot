@@ -10,6 +10,7 @@ import urllib.parse
 import urllib.request
 import time
 import base64
+import threading
 import datetime as dt
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from pathlib import Path
@@ -52,6 +53,7 @@ app.mount("/plots", StaticFiles(directory=str(ROOT / "plots"), check_dir=False),
 templates = Jinja2Templates(directory=str(BASE / "templates"))
 
 scheduler: BackgroundScheduler | None = None
+_AI_RELOAD_LOCK = threading.Lock()
 
 
 def _auth_enabled() -> bool:
@@ -228,6 +230,28 @@ def _save_ai_config_text(raw: str) -> None:
     data["alerts"]["telegram_bot_token"] = ""
     data["alerts"]["telegram_chat_id"] = ""
     AI_CONFIG_PATH.write_text(yaml.safe_dump(data, sort_keys=False))
+
+
+def _apply_ai_config_runtime_reload() -> dict:
+    """Apply updated config.yaml to runtime bot process.
+
+    main.py reads config only at startup, so we must restart a running process.
+    If bot is currently stopped, new config will apply on next start.
+    """
+    with _AI_RELOAD_LOCK:
+        was_running = _is_ai_running()
+        if not was_running:
+            return {"applied": False, "running": False, "message": "bot_not_running"}
+
+        _stop_ai_bot()
+        if not _wait_ai_stopped(6.0):
+            raise RuntimeError("failed to stop running AI bot for config reload")
+
+        _start_ai_bot()
+        if not _is_ai_running():
+            raise RuntimeError("failed to restart AI bot after config save")
+
+        return {"applied": True, "running": True, "message": "bot_restarted"}
 
 
 def _mask(v: str) -> str:
@@ -1057,9 +1081,13 @@ def ai_config_get():
 
 @app.post("/api/ai/config")
 def ai_config_save(payload: Dict = Body(...)):
-    raw = str(payload.get("text", ""))
-    _save_ai_config_text(raw)
-    return {"ok": True}
+    try:
+        raw = str(payload.get("text", ""))
+        _save_ai_config_text(raw)
+        reload_status = _apply_ai_config_runtime_reload()
+        return {"ok": True, "runtime_reload": reload_status}
+    except RuntimeError as e:
+        return _error_response("RUNTIME_RELOAD_FAILED", str(e), 500)
 
 
 @app.post("/api/ai/config2")
@@ -1070,7 +1098,10 @@ async def ai_config_save_v2(request: Request):
     try:
         raw = base64.b64decode(encoded + "===").decode("utf-8", errors="strict")
         _save_ai_config_text(raw)
-        return {"ok": True}
+        reload_status = _apply_ai_config_runtime_reload()
+        return {"ok": True, "runtime_reload": reload_status}
+    except RuntimeError as e:
+        return _error_response("RUNTIME_RELOAD_FAILED", str(e), 500)
     except Exception as e:
         return _error_response("INVALID_CONFIG", str(e), 400)
 
