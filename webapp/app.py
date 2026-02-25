@@ -54,6 +54,7 @@ templates = Jinja2Templates(directory=str(BASE / "templates"))
 
 scheduler: BackgroundScheduler | None = None
 _AI_RELOAD_LOCK = threading.Lock()
+_AI_CONTROL_LOCK = threading.Lock()
 
 
 def _auth_enabled() -> bool:
@@ -162,6 +163,47 @@ def _wait_ai_stopped(timeout_sec: float = 6.0) -> bool:
             return True
         time.sleep(0.2)
     return not _is_ai_running()
+
+
+def _set_ai_running(desired_running: bool, source: str) -> dict:
+    """Set AI bot running state in an idempotent and race-safe way."""
+    with _AI_CONTROL_LOCK:
+        before = _is_ai_running()
+        if before == desired_running:
+            return {
+                "ok": True,
+                "running": before,
+                "changed": False,
+                "noop": True,
+                "message": "already_running" if before else "already_stopped",
+            }
+
+        if desired_running:
+            _start_ai_bot()
+            after = _is_ai_running()
+            changed = bool(after)
+            if changed:
+                _notify_telegram(f"🟢 AI bot started from {source}")
+            return {
+                "ok": changed,
+                "running": after,
+                "changed": changed,
+                "noop": False,
+                "message": "started" if changed else "start_failed",
+            }
+
+        _stop_ai_bot()
+        after = _is_ai_running()
+        changed = not after
+        if changed:
+            _notify_telegram(f"🛑 AI bot stopped from {source}")
+        return {
+            "ok": changed,
+            "running": after,
+            "changed": changed,
+            "noop": False,
+            "message": "stopped" if changed else "stop_failed",
+        }
 
 
 def _create_new_ai_log() -> dict:
@@ -378,16 +420,12 @@ def _poll_server_telegram_commands() -> None:
         cmd = parts[0].lower() if parts else ""
 
         if cmd == "/start":
-            if _is_ai_running():
+            result = _set_ai_running(True, "Telegram command")
+            if result.get("noop"):
                 _notify_telegram("✅ AI bot already running.")
-            else:
-                _start_ai_bot()
-                _notify_telegram("🟢 AI bot started from Telegram command")
         elif cmd == "/stop":
-            if _is_ai_running():
-                _stop_ai_bot()
-                _notify_telegram("🛑 AI bot stopped from Telegram command")
-            else:
+            result = _set_ai_running(False, "Telegram command")
+            if result.get("noop"):
                 _notify_telegram("✅ AI bot already stopped.")
         elif cmd == "/status":
             _notify_telegram(_server_status_text())
@@ -1020,8 +1058,11 @@ def run_backtester(req: BacktestRequest):
 
 @app.get("/api/ai/status")
 def ai_status():
+    running = _is_ai_running()
     return {
-        "running": _is_ai_running(),
+        "running": running,
+        "can_start": not running,
+        "can_stop": running,
         "log_tail": _tail_text(_ai_log_path(), 10),
         "network_health": _ai_network_health(),
     }
@@ -1043,17 +1084,16 @@ def system_health():
 
 @app.post("/api/ai/start")
 def ai_start():
-    _start_ai_bot()
-    if _is_ai_running():
-        _notify_telegram("🟢 AI bot started from Web UI")
-    return {"ok": True, "running": _is_ai_running(), "log_tail": _tail_text(_ai_log_path(), 10)}
+    result = _set_ai_running(True, "Web UI")
+    result["log_tail"] = _tail_text(_ai_log_path(), 10)
+    return result
 
 
 @app.post("/api/ai/stop")
 def ai_stop():
-    _stop_ai_bot()
-    _notify_telegram("🛑 AI bot stopped from Web UI")
-    return {"ok": True, "running": _is_ai_running(), "log_tail": _tail_text(_ai_log_path(), 10)}
+    result = _set_ai_running(False, "Web UI")
+    result["log_tail"] = _tail_text(_ai_log_path(), 10)
+    return result
 
 
 @app.get("/api/ai/logs")
