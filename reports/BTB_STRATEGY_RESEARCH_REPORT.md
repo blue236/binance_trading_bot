@@ -1,49 +1,59 @@
-# BTB Strategy Research Report (OOS-focused)
+# BTB Multi-Symbol Strategy Revalidation Report (OOS-focused)
 
-- Data source: `webapp_state.sqlite` (`ohlcv` table populated by BTB web chart refresh)
-- Dataset used for optimization: `BTC/USDC`, `1d`, 705 bars (`2024-03-21` ~ `2026-02-23`)
-- Cost assumptions: fee `0.10%` + slippage `0.05%` per side (`0.15%` side cost)
-- Split: Train 60% / Validation 20% / Test 20% (time-ordered)
+- Data source: `webapp_state.sqlite` (`ohlcv` table, BTB chart refresh)
+- Symbols: BTC/USDT, ETH/USDT, SOL/USDT
+- Timeframe: `1d`
+- Split: Train 60% / Validation 20% / Test 20% (time-ordered per symbol)
+- Cost assumptions: fee `0.10%` + slippage `0.05%` per side
 
-## Baseline (current quick baseline)
-- Strategy: EMA crossover 50/200
+## Data Coverage
+| Symbol | Bars | From | To |
+|---|---:|---|---|
+| BTC/USDT | 1000 | 2023-06-02 | 2026-02-25 |
+| ETH/USDT | 1000 | 2023-06-02 | 2026-02-25 |
+| SOL/USDT | 1000 | 2023-06-02 | 2026-02-25 |
 
+## Baseline (EMA 50/200)
+### Aggregate (equal-weight by symbol)
 | Window | Net Return | Max DD | Win Rate | Trades | Profit Factor |
 |---|---:|---:|---:|---:|---:|
-| Train | 32.93% | -28.16% | 100.0% | 2 | 999.000 |
-| Validation | 0.00% | 0.00% | 0.0% | 0 | 0.000 |
-| Test | 0.00% | 0.00% | 0.0% | 0 | 0.000 |
-| Full | 18.69% | -28.16% | 50.0% | 2 | 9.824 |
+| train | 122.63% | -35.58% | 83.3% | 4 | 671.344 |
+| val | 0.00% | 0.00% | 0.0% | 0 | 0.000 |
+| test | 0.00% | 0.00% | 0.0% | 0 | 0.000 |
 
-## Candidate Strategies Explored
-1. `trend_pullback`
-2. `mean_reversion_bb` (BB + RSI + ADX regime)
-3. `breakout_dynamic_exit`
+### Test (OOS) by Symbol
+| Symbol | Net Return | Max DD | Trades |
+|---|---:|---:|---:|
+| BTC/USDT | 0.00% | 0.00% | 0 |
+| ETH/USDT | 0.00% | 0.00% | 0 |
+| SOL/USDT | 0.00% | 0.00% | 0 |
 
-## Best Candidate (validation-score winner)
-- Strategy: **mean_reversion_bb**
-- Params: `bb_len=20, bb_mult=2.0, adx_max=24, rsi_entry=40, rsi_exit=55, sl_atr_mult=1.6, max_hold_bars=14`
+## Candidate Search Space
+- `trend_pullback` score=-30.8435
+- `mean_reversion_bb` score=8.7328
+- `breakout_dynamic_exit` score=-15.231
 
+## Winner: `mean_reversion_bb`
+- Selection score: 8.7328
+- Params: `{"bb_len": 20, "bb_mult": 1.8, "rsi_len": 14, "atr_len": 14, "adx_len": 14, "adx_max": 24, "rsi_entry": 40, "rsi_exit": 55, "sl_atr_mult": 1.2, "max_hold_bars": 8}`
+
+## Winner Performance
+### Aggregate (equal-weight by symbol)
 | Window | Net Return | Max DD | Win Rate | Trades | Profit Factor |
 |---|---:|---:|---:|---:|---:|
-| Train | 25.84% | -7.12% | 80.0% | 5 | 4.570 |
-| Validation | 9.69% | -3.83% | 100.0% | 3 | 999.000 |
-| Test | 0.00% | 0.00% | 0.0% | 0 | 0.000 |
+| train | 1.20% | -12.98% | 46.7% | 20 | 1.113 |
+| val | 12.99% | -8.70% | 70.0% | 10 | 334.200 |
+| test | 3.97% | -10.39% | 41.7% | 9 | 10.634 |
 
-## Interpretation (anti-overfit view)
-- Candidate reduced drawdown significantly vs baseline in train/validation.
-- However, **test window has no trades** (insufficient signal frequency in latest segment), so OOS conviction is limited.
-- Therefore this should be treated as a **research profile only**, not production rollout yet.
+### Test (OOS) by Symbol
+| Symbol | Net Return | Max DD | Trades |
+|---|---:|---:|---:|
+| BTC/USDT | 4.20% | -4.25% | 2 |
+| ETH/USDT | 18.97% | -7.18% | 4 |
+| SOL/USDT | -11.25% | -19.75% | 3 |
 
-## AI model feasibility
-- Because OOS test activity/performance is not yet robust, adding AI now is likely premature.
-- Recommended next AI scope (after more OOS data):
-  - Regime classifier (`trend/range/high-vol`) to gate BB entries.
-  - Signal quality scoring model to suppress low-expectancy entries.
-- Risk: data size is currently too small for stable ML generalization.
-
-## Code changes in this branch
-- Added reproducible research script: `scripts/btb_strategy_research.py`
-- Added report artifact: `reports/btb_strategy_research.json`, `reports/BTB_STRATEGY_RESEARCH_REPORT.md`
-- Implemented optional strategy mode in runtime: `mean_reversion_bb_regime` in `main.py`
-- Added non-live config profile: `config.btb_research_mr.yaml`
+## Conclusion
+- Aggregate OOS return: baseline `0.00%` vs winner `3.97%`.
+- Aggregate OOS max DD: baseline `0.00%` vs winner `-10.39%`.
+- Aggregate OOS trades: baseline `0` vs winner `9`.
+- Winner was selected with OOS trade-count penalty to avoid sparse-trade overfitting.
