@@ -183,6 +183,7 @@
     if(!btn || btn.dataset.busy==='1') return;
     const originalText = btn.textContent;
     const wasDisabled = btn.disabled;
+    const restoreDisabled = opts.restoreDisabled !== false;
     const timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : 45000;
 
     btn.dataset.busy='1';
@@ -207,7 +208,7 @@
       btn.classList.remove('is-busy');
       btn.removeAttribute('aria-busy');
       btn.textContent=originalText;
-      if(!wasDisabled) btn.disabled=false;
+      if(restoreDisabled && !wasDisabled) btn.disabled=false;
     }
   }
 
@@ -404,24 +405,36 @@
     setAiLog(j.tail || '(no logs)');
   }
 
+  function applyAiState(j){
+    const running=!!j?.running;
+    const canStart=(j?.can_start ?? !running);
+    const canStop=(j?.can_stop ?? running);
+    document.getElementById('aiStatus').textContent=running?'RUNNING':'STOPPED';
+    document.getElementById('aiStart').disabled=!canStart;
+    document.getElementById('aiStop').disabled=!canStop;
+  }
+
   async function updateAiStatus(){
     const r=await fetch('/api/ai/status');
     const j=await r.json();
-    document.getElementById('aiStatus').textContent=j.running?'RUNNING':'STOPPED';
+    applyAiState(j);
+    return j;
   }
 
   async function aiStart(){
     const r=await fetch('/api/ai/start',{method:'POST'});
     const j=await r.json();
-    document.getElementById('aiStatus').textContent=j.running?'RUNNING':'STOPPED';
+    applyAiState(j);
     await refreshAiLogs();
+    await updateAiStatus();
   }
 
   async function aiStop(){
     const r=await fetch('/api/ai/stop',{method:'POST'});
     const j=await r.json();
-    document.getElementById('aiStatus').textContent=j.running?'RUNNING':'STOPPED';
+    applyAiState(j);
     await refreshAiLogs();
+    await updateAiStatus();
   }
 
   async function aiLogNew(){
@@ -680,8 +693,8 @@
   document.getElementById('cfgSave').onclick=()=>withButtonProgress('cfgSave','Saving...',saveConfig);
   document.getElementById('btUnifiedRun').onclick=()=>withButtonProgress('btUnifiedRun','Running...',runBacktest);
   document.getElementById('legacyRun').onclick=()=>withButtonProgress('legacyRun','Processing...',runLegacyBacktester);
-  document.getElementById('aiStart').onclick=()=>withButtonProgress('aiStart','Starting...',aiStart);
-  document.getElementById('aiStop').onclick=()=>withButtonProgress('aiStop','Stopping...',aiStop);
+  document.getElementById('aiStart').onclick=()=>withButtonProgress('aiStart','Starting...',aiStart,{restoreDisabled:false});
+  document.getElementById('aiStop').onclick=()=>withButtonProgress('aiStop','Stopping...',aiStop,{restoreDisabled:false});
   document.getElementById('aiLogRefresh').onclick=()=>withButtonProgress('aiLogRefresh','Refreshing...',()=>refreshAiLogs());
   document.getElementById('aiLogNew').onclick=()=>withButtonProgress('aiLogNew','Creating...',aiLogNew);
   document.getElementById('aiLogDownload').onclick=()=>{ window.location.href='/api/ai/logs/download'; };

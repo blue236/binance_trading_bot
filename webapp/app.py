@@ -10,6 +10,7 @@ import urllib.parse
 import urllib.request
 import time
 import base64
+import threading
 import datetime as dt
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from pathlib import Path
@@ -52,6 +53,8 @@ app.mount("/plots", StaticFiles(directory=str(ROOT / "plots"), check_dir=False),
 templates = Jinja2Templates(directory=str(BASE / "templates"))
 
 scheduler: BackgroundScheduler | None = None
+_AI_RELOAD_LOCK = threading.Lock()
+_AI_CONTROL_LOCK = threading.Lock()
 
 
 def _auth_enabled() -> bool:
@@ -162,6 +165,47 @@ def _wait_ai_stopped(timeout_sec: float = 6.0) -> bool:
     return not _is_ai_running()
 
 
+def _set_ai_running(desired_running: bool, source: str) -> dict:
+    """Set AI bot running state in an idempotent and race-safe way."""
+    with _AI_CONTROL_LOCK:
+        before = _is_ai_running()
+        if before == desired_running:
+            return {
+                "ok": True,
+                "running": before,
+                "changed": False,
+                "noop": True,
+                "message": "already_running" if before else "already_stopped",
+            }
+
+        if desired_running:
+            _start_ai_bot()
+            after = _is_ai_running()
+            changed = bool(after)
+            if changed:
+                _notify_telegram(f"🟢 AI bot started from {source}")
+            return {
+                "ok": changed,
+                "running": after,
+                "changed": changed,
+                "noop": False,
+                "message": "started" if changed else "start_failed",
+            }
+
+        _stop_ai_bot()
+        after = _is_ai_running()
+        changed = not after
+        if changed:
+            _notify_telegram(f"🛑 AI bot stopped from {source}")
+        return {
+            "ok": changed,
+            "running": after,
+            "changed": changed,
+            "noop": False,
+            "message": "stopped" if changed else "stop_failed",
+        }
+
+
 def _create_new_ai_log() -> dict:
     path = _ai_log_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -228,6 +272,28 @@ def _save_ai_config_text(raw: str) -> None:
     data["alerts"]["telegram_bot_token"] = ""
     data["alerts"]["telegram_chat_id"] = ""
     AI_CONFIG_PATH.write_text(yaml.safe_dump(data, sort_keys=False))
+
+
+def _apply_ai_config_runtime_reload() -> dict:
+    """Apply updated config.yaml to runtime bot process.
+
+    main.py reads config only at startup, so we must restart a running process.
+    If bot is currently stopped, new config will apply on next start.
+    """
+    with _AI_RELOAD_LOCK:
+        was_running = _is_ai_running()
+        if not was_running:
+            return {"applied": False, "running": False, "message": "bot_not_running"}
+
+        _stop_ai_bot()
+        if not _wait_ai_stopped(6.0):
+            raise RuntimeError("failed to stop running AI bot for config reload")
+
+        _start_ai_bot()
+        if not _is_ai_running():
+            raise RuntimeError("failed to restart AI bot after config save")
+
+        return {"applied": True, "running": True, "message": "bot_restarted"}
 
 
 def _mask(v: str) -> str:
@@ -354,16 +420,12 @@ def _poll_server_telegram_commands() -> None:
         cmd = parts[0].lower() if parts else ""
 
         if cmd == "/start":
-            if _is_ai_running():
+            result = _set_ai_running(True, "Telegram command")
+            if result.get("noop"):
                 _notify_telegram("✅ AI bot already running.")
-            else:
-                _start_ai_bot()
-                _notify_telegram("🟢 AI bot started from Telegram command")
         elif cmd == "/stop":
-            if _is_ai_running():
-                _stop_ai_bot()
-                _notify_telegram("🛑 AI bot stopped from Telegram command")
-            else:
+            result = _set_ai_running(False, "Telegram command")
+            if result.get("noop"):
                 _notify_telegram("✅ AI bot already stopped.")
         elif cmd == "/status":
             _notify_telegram(_server_status_text())
@@ -996,8 +1058,11 @@ def run_backtester(req: BacktestRequest):
 
 @app.get("/api/ai/status")
 def ai_status():
+    running = _is_ai_running()
     return {
-        "running": _is_ai_running(),
+        "running": running,
+        "can_start": not running,
+        "can_stop": running,
         "log_tail": _tail_text(_ai_log_path(), 10),
         "network_health": _ai_network_health(),
     }
@@ -1019,17 +1084,16 @@ def system_health():
 
 @app.post("/api/ai/start")
 def ai_start():
-    _start_ai_bot()
-    if _is_ai_running():
-        _notify_telegram("🟢 AI bot started from Web UI")
-    return {"ok": True, "running": _is_ai_running(), "log_tail": _tail_text(_ai_log_path(), 10)}
+    result = _set_ai_running(True, "Web UI")
+    result["log_tail"] = _tail_text(_ai_log_path(), 10)
+    return result
 
 
 @app.post("/api/ai/stop")
 def ai_stop():
-    _stop_ai_bot()
-    _notify_telegram("🛑 AI bot stopped from Web UI")
-    return {"ok": True, "running": _is_ai_running(), "log_tail": _tail_text(_ai_log_path(), 10)}
+    result = _set_ai_running(False, "Web UI")
+    result["log_tail"] = _tail_text(_ai_log_path(), 10)
+    return result
 
 
 @app.get("/api/ai/logs")
@@ -1057,9 +1121,13 @@ def ai_config_get():
 
 @app.post("/api/ai/config")
 def ai_config_save(payload: Dict = Body(...)):
-    raw = str(payload.get("text", ""))
-    _save_ai_config_text(raw)
-    return {"ok": True}
+    try:
+        raw = str(payload.get("text", ""))
+        _save_ai_config_text(raw)
+        reload_status = _apply_ai_config_runtime_reload()
+        return {"ok": True, "runtime_reload": reload_status}
+    except RuntimeError as e:
+        return _error_response("RUNTIME_RELOAD_FAILED", str(e), 500)
 
 
 @app.post("/api/ai/config2")
@@ -1070,7 +1138,10 @@ async def ai_config_save_v2(request: Request):
     try:
         raw = base64.b64decode(encoded + "===").decode("utf-8", errors="strict")
         _save_ai_config_text(raw)
-        return {"ok": True}
+        reload_status = _apply_ai_config_runtime_reload()
+        return {"ok": True, "runtime_reload": reload_status}
+    except RuntimeError as e:
+        return _error_response("RUNTIME_RELOAD_FAILED", str(e), 500)
     except Exception as e:
         return _error_response("INVALID_CONFIG", str(e), 400)
 
