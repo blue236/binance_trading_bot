@@ -82,14 +82,20 @@ def setup_logger(log_dir, name="bot.log", level="INFO"):
     logger = logging.getLogger("bot")
     log_level = getattr(logging, str(level).upper(), logging.INFO)
     logger.setLevel(log_level)
+
     if logger.handlers:
+        for h in logger.handlers:
+            h.setLevel(log_level)
         return logger
+
     fpath = os.path.join(log_dir, name)
     fmt = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
-    fh = logging.FileHandler(fpath)
+    fh = logging.FileHandler(fpath, encoding="utf-8")
+    fh.setLevel(log_level)
     fh.setFormatter(fmt)
     logger.addHandler(fh)
     sh = logging.StreamHandler(sys.stdout)
+    sh.setLevel(log_level)
     sh.setFormatter(fmt)
     logger.addHandler(sh)
     return logger
@@ -848,14 +854,47 @@ def h1_signals(df, cfg, regime):
 
 def fetch_equity_usdt(exchange, base_ccy="USDT", balances=None, tickers=None):
     balances = balances or safe_fetch_balance(exchange)["total"]
-    equity = balances.get(base_ccy, 0.0)
-    tickers = tickers or safe_fetch_tickers(exchange, list(exchange.markets.keys()), {"network": {"retry_count": 2, "retry_backoff_sec": 0.5}})
+    equity = float(balances.get(base_ccy, 0.0) or 0.0)
+
+    # Build only relevant quote pairs to avoid mixed market-type errors
+    # (e.g., binance spot + swap symbols in one fetch_tickers call).
+    symbols = []
+    for asset, amt in (balances or {}).items():
+        if asset in [base_ccy, None] or not amt:
+            continue
+        sym = f"{asset}/{base_ccy}"
+        market = (exchange.markets or {}).get(sym) or {}
+        if not market:
+            continue
+        # Keep equity conversion on spot pairs only.
+        if market.get("spot") is False:
+            continue
+        symbols.append(sym)
+
+    if tickers is None:
+        tickers = {}
+        if symbols:
+            try:
+                tickers = safe_fetch_tickers(
+                    exchange,
+                    symbols,
+                    {"network": {"retry_count": 2, "retry_backoff_sec": 0.5}},
+                )
+            except Exception as e:
+                logging.getLogger("bot").warning(
+                    "Equity conversion ticker fetch failed for %s quote=%s: %s",
+                    len(symbols),
+                    base_ccy,
+                    e,
+                )
+                tickers = {}
+
     for asset, amt in balances.items():
         if asset in [base_ccy, None] or not amt:
             continue
         sym = f"{asset}/{base_ccy}"
-        if sym in exchange.markets and sym in tickers and "last" in tickers[sym]:
-            equity += amt * tickers[sym]["last"]
+        if sym in (exchange.markets or {}) and sym in (tickers or {}) and "last" in tickers[sym]:
+            equity += float(amt) * float(tickers[sym]["last"])
     return float(equity)
 
 def position_size(equity_usdt, price, atr, atr_mult, risk_pct):
@@ -1282,4 +1321,10 @@ def main():
             time.sleep(10)
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        # Ensure startup failures are persisted into bot.log so Web UI log stream
+        # shows the real reason instead of appearing to stop silently.
+        logging.getLogger("bot").exception("Fatal startup error")
+        raise
