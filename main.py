@@ -792,6 +792,7 @@ def h1_signals(df, cfg, regime):
     emaS = EMAIndicator(df["c"], st["ema_slow"]).ema_indicator()
     atr  = AverageTrueRange(df["h"], df["l"], df["c"], st["atr_len"]).average_true_range()
     rsi  = RSIIndicator(df["c"], st["rsi_len"]).rsi()
+    adx  = ADXIndicator(df["h"], df["l"], df["c"], st["adx_len"]).adx()
     don_hi = df["h"].rolling(st["donchian_len"]).max()
     bb = BollingerBands(df["c"], st["bb_len"], st["bb_mult"])
     lower = bb.bollinger_lband()
@@ -801,14 +802,34 @@ def h1_signals(df, cfg, regime):
     atr_v = float(atr.iloc[-1])
     emaFv, emaSv = float(emaF.iloc[-1]), float(emaS.iloc[-1])
     rsiv = float(rsi.iloc[-1])
+    adxv = float(adx.iloc[-1])
     don_hi_prev = float(don_hi.iloc[-2]) if not math.isnan(don_hi.iloc[-2]) else None
     lower_v = float(lower.iloc[-1]) if not math.isnan(lower.iloc[-1]) else None
     mid_v   = float(mid.iloc[-1]) if not math.isnan(mid.iloc[-1]) else None
 
     signal = None
     params = {}
+    mode = str(st.get("mode", "legacy_hybrid")).lower()
 
-    if regime == "trend":
+    if mode == "mean_reversion_bb_regime":
+        adx_max = float(st.get("mr_adx_max", 24))
+        rsi_entry = float(st.get("mr_rsi_entry", st.get("rsi_mr_threshold", 35)))
+        cond = (lower_v is not None) and (close <= lower_v) and (rsiv <= rsi_entry) and (adxv <= adx_max)
+        logger.debug(
+            "MR-BB check: close=%.6f lower=%.6f rsi=%.2f<=%.2f adx=%.2f<=%.2f cond=%s",
+            close,
+            lower_v if lower_v is not None else float("nan"),
+            rsiv,
+            rsi_entry,
+            adxv,
+            adx_max,
+            cond,
+        )
+        if cond:
+            signal = "R_LONG"
+            params["sl"] = close - float(st.get("mr_sl_atr_mult", st["atr_sl_mr_mult"])) * atr_v
+            params["tp_mid"] = mid_v
+    elif regime == "trend":
         cond = (don_hi_prev is not None) and (close > don_hi_prev) and (emaFv > emaSv) and (rsiv < st["rsi_overheat"])
         logger.debug(
             "Trend check: close=%.6f don_hi_prev=%s emaF=%.6f emaS=%.6f rsi=%.2f overheat=%s cond=%s",
@@ -843,12 +864,13 @@ def h1_signals(df, cfg, regime):
     params["close"] = close
     if signal:
         logger.debug(
-            "Signal=%s close=%.6f atr=%.6f sl=%.6f regime=%s",
+            "Signal=%s close=%.6f atr=%.6f sl=%.6f regime=%s mode=%s",
             signal,
             close,
             atr_v,
             params.get("sl", 0.0),
             regime,
+            mode,
         )
     return signal, params
 

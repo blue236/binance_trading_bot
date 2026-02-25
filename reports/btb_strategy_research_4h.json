@@ -1,0 +1,216 @@
+{
+  "data": {
+    "db_path": "webapp_state.sqlite",
+    "symbol": "BTC/USDC",
+    "timeframe": "4h",
+    "bars": 714,
+    "from": "2025-10-29 12:00:00+00:00",
+    "to": "2026-02-25 08:00:00+00:00",
+    "split": {
+      "train": [
+        0,
+        428
+      ],
+      "val": [
+        428,
+        571
+      ],
+      "test": [
+        571,
+        714
+      ]
+    }
+  },
+  "assumptions": {
+    "fee_rate": 0.001,
+    "slippage_rate": 0.0005,
+    "side_cost": 0.0015
+  },
+  "baseline": {
+    "name": "ema_crossover_50_200",
+    "params": {
+      "ema_fast": 50,
+      "ema_slow": 200
+    },
+    "train": {
+      "net_return_pct": -3.93,
+      "max_drawdown_pct": -4.58,
+      "win_rate_pct": 0.0,
+      "trade_count": 1,
+      "profit_factor": 0.0
+    },
+    "val": {
+      "net_return_pct": 0.0,
+      "max_drawdown_pct": 0.0,
+      "win_rate_pct": 0.0,
+      "trade_count": 0,
+      "profit_factor": 0.0
+    },
+    "test": {
+      "net_return_pct": 0.0,
+      "max_drawdown_pct": 0.0,
+      "win_rate_pct": 0.0,
+      "trade_count": 0,
+      "profit_factor": 0.0
+    },
+    "metrics_full": {
+      "net_return_pct": -5.2,
+      "max_drawdown_pct": -9.2,
+      "win_rate_pct": 0.0,
+      "trade_count": 1,
+      "profit_factor": 0.0
+    }
+  },
+  "candidates": [
+    {
+      "strategy": "trend_pullback",
+      "params": {
+        "ema_fast": 34,
+        "ema_slow": 144,
+        "rsi_len": 14,
+        "atr_len": 14,
+        "adx_len": 14,
+        "adx_min": 16,
+        "rsi_reclaim": 42,
+        "rsi_upper": 58,
+        "rsi_take": 68,
+        "sl_atr_mult": 1.2,
+        "trail_atr_mult": 2.2,
+        "cooldown_bars": 2
+      },
+      "train": {
+        "net_return_pct": -0.12,
+        "max_drawdown_pct": -0.15,
+        "win_rate_pct": 0.0,
+        "trade_count": 1,
+        "profit_factor": 0.0
+      },
+      "val": {
+        "net_return_pct": 0.0,
+        "max_drawdown_pct": 0.0,
+        "win_rate_pct": 0.0,
+        "trade_count": 0,
+        "profit_factor": 0.0
+      },
+      "selection_score": -6.9128,
+      "test": {
+        "net_return_pct": 0.0,
+        "max_drawdown_pct": 0.0,
+        "win_rate_pct": 0.0,
+        "trade_count": 0,
+        "profit_factor": 0.0
+      }
+    },
+    {
+      "strategy": "mean_reversion_bb",
+      "params": {
+        "bb_len": 20,
+        "bb_mult": 1.6,
+        "rsi_len": 14,
+        "atr_len": 14,
+        "adx_len": 14,
+        "adx_max": 16,
+        "rsi_entry": 30,
+        "rsi_exit": 55,
+        "sl_atr_mult": 1.2,
+        "max_hold_bars": 6
+      },
+      "train": {
+        "net_return_pct": 0.0,
+        "max_drawdown_pct": 0.0,
+        "win_rate_pct": 0.0,
+        "trade_count": 0,
+        "profit_factor": 0.0
+      },
+      "val": {
+        "net_return_pct": 0.0,
+        "max_drawdown_pct": 0.0,
+        "win_rate_pct": 0.0,
+        "trade_count": 0,
+        "profit_factor": 0.0
+      },
+      "selection_score": -7.5,
+      "test": {
+        "net_return_pct": -3.44,
+        "max_drawdown_pct": -11.08,
+        "win_rate_pct": 20.0,
+        "trade_count": 5,
+        "profit_factor": 0.722
+      }
+    },
+    {
+      "strategy": "breakout_dynamic_exit",
+      "params": {
+        "don_len": 10,
+        "ema_slow": 200,
+        "adx_len": 14,
+        "atr_len": 14,
+        "adx_min": 14,
+        "trail_atr_mult": 2.0,
+        "init_sl_atr_mult": 1.2,
+        "cooldown_bars": 2
+      },
+      "train": {
+        "net_return_pct": 1.15,
+        "max_drawdown_pct": -2.02,
+        "win_rate_pct": 100.0,
+        "trade_count": 1,
+        "profit_factor": 999.0
+      },
+      "val": {
+        "net_return_pct": 0.0,
+        "max_drawdown_pct": 0.0,
+        "win_rate_pct": 0.0,
+        "trade_count": 0,
+        "profit_factor": 0.0
+      },
+      "selection_score": -4.062,
+      "test": {
+        "net_return_pct": 0.0,
+        "max_drawdown_pct": 0.0,
+        "win_rate_pct": 0.0,
+        "trade_count": 0,
+        "profit_factor": 0.0
+      }
+    }
+  ],
+  "winner": {
+    "strategy": "trend_pullback",
+    "params": {
+      "ema_fast": 34,
+      "ema_slow": 144,
+      "rsi_len": 14,
+      "atr_len": 14,
+      "adx_len": 14,
+      "adx_min": 16,
+      "rsi_reclaim": 42,
+      "rsi_upper": 58,
+      "rsi_take": 68,
+      "sl_atr_mult": 1.2,
+      "trail_atr_mult": 2.2,
+      "cooldown_bars": 2
+    },
+    "train": {
+      "net_return_pct": -0.12,
+      "max_drawdown_pct": -0.15,
+      "win_rate_pct": 0.0,
+      "trade_count": 1,
+      "profit_factor": 0.0
+    },
+    "val": {
+      "net_return_pct": 0.0,
+      "max_drawdown_pct": 0.0,
+      "win_rate_pct": 0.0,
+      "trade_count": 0,
+      "profit_factor": 0.0
+    },
+    "selection_score": -6.9128,
+    "test": {
+      "net_return_pct": 0.0,
+      "max_drawdown_pct": 0.0,
+      "win_rate_pct": 0.0,
+      "trade_count": 0,
+      "profit_factor": 0.0
+    }
+  }
+}

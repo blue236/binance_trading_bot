@@ -1,0 +1,56 @@
+# Research-only config profile (do NOT use as live production default)
+# Derived from reports/btb_strategy_research.json winner on BTB web-downloaded OHLCV.
+general:
+  symbols:
+    - BTC/USDC
+  timeframe_signal: 1d
+  timeframe_regime: 1d
+  exchange: binance
+  dry_run: true
+  base_currency: USDC
+  min_notional_usdc: 10.0
+
+risk:
+  per_trade_risk_pct: 0.5
+  daily_loss_stop_pct: 2.0
+  max_concurrent_positions: 1
+  cooldown_hours: 8
+
+strategy:
+  mode: mean_reversion_bb_regime
+  adx_len: 14
+  ema_fast: 50
+  ema_slow: 200
+  donchian_len: 20
+  atr_len: 14
+  bb_len: 20
+  bb_mult: 2.0
+  rsi_len: 14
+
+  # tuned params from research winner
+  mr_adx_max: 24
+  mr_rsi_entry: 40
+  mr_sl_atr_mult: 1.6
+
+  # keep existing safety-compatible fields
+  atr_sl_trend_mult: 1.5
+  atr_trail_mult: 2.5
+  atr_sl_mr_mult: 1.2
+  rsi_mr_threshold: 35
+  mean_reversion_time_stop_hours: 24
+
+alerts:
+  enable_telegram: false
+  telegram_bot_token: ""
+  telegram_chat_id: ""
+  enable_trade_approval: false
+  approval_timeout_sec: 120
+
+logging:
+  csv_dir: ./logs
+  state_file: ./state.json
+  tz: CET
+
+credentials:
+  api_key: ""
+  api_secret: ""
