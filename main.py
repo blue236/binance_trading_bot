@@ -5,7 +5,7 @@ import urllib.request
 import pandas as pd
 import numpy as np
 import yaml
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from dateutil import tz
 
 import ccxt
@@ -128,7 +128,7 @@ def audit_log(csv_dir, event, payload):
     ensure_dir(csv_dir)
     fpath = os.path.join(csv_dir, "audit.log")
     rec = {
-        "ts": datetime.utcnow().isoformat() + "Z",
+        "ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "event": event,
         **(payload or {}),
     }
@@ -166,7 +166,7 @@ def safe_fetch_balance(exchange, retries=5, backoff_sec=1.0, logger=None):
     for i in range(retries):
         try:
             return exchange.fetch_balance()
-        except ccxt.base.errors.InvalidNonce:
+        except ccxt.InvalidNonce:
             # Binance -1021 대응
             try:
                 exchange.load_time_difference()
@@ -176,7 +176,7 @@ def safe_fetch_balance(exchange, retries=5, backoff_sec=1.0, logger=None):
         except (ccxt.NetworkError, ccxt.ExchangeNotAvailable, ccxt.RequestTimeout) as e:
             NETWORK_HEALTH["consecutive_failures"] = int(NETWORK_HEALTH.get("consecutive_failures", 0)) + 1
             NETWORK_HEALTH["last_error"] = str(e)
-            NETWORK_HEALTH["last_error_at"] = datetime.utcnow().isoformat() + "Z"
+            NETWORK_HEALTH["last_error_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
             NETWORK_HEALTH["last_label"] = "fetch_balance"
             if i < retries - 1:
                 if logger:
@@ -212,14 +212,14 @@ def call_with_retry(fn, *, retries=3, backoff_sec=1.0, logger=None, label="netwo
         try:
             out = fn()
             NETWORK_HEALTH["consecutive_failures"] = 0
-            NETWORK_HEALTH["last_ok_at"] = datetime.utcnow().isoformat() + "Z"
+            NETWORK_HEALTH["last_ok_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
             NETWORK_HEALTH["last_label"] = label
             return out
         except (ccxt.NetworkError, ccxt.ExchangeNotAvailable, ccxt.RequestTimeout) as e:
             last_err = e
             NETWORK_HEALTH["consecutive_failures"] = int(NETWORK_HEALTH.get("consecutive_failures", 0)) + 1
             NETWORK_HEALTH["last_error"] = str(e)
-            NETWORK_HEALTH["last_error_at"] = datetime.utcnow().isoformat() + "Z"
+            NETWORK_HEALTH["last_error_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
             NETWORK_HEALTH["last_label"] = label
             if attempt < retries:
                 if logger:
@@ -766,18 +766,20 @@ def fetch_ohlc(exchange, symbol, timeframe, limit=500, cfg=None, logger=None):
 def regime_filter(exchange, symbol, cfg):
     logger = logging.getLogger("bot")
     tf = cfg["general"]["timeframe_regime"]
+    st = cfg.get("strategy", {})
+    trend_adx_threshold = float(st.get("trend_adx_threshold", 20.0))
     d = fetch_ohlc(exchange, symbol, tf, 400, cfg=cfg, logger=logger)
-    ema200 = EMAIndicator(d["c"], cfg["strategy"]["ema_slow"]).ema_indicator()
+    ema200 = EMAIndicator(d["c"], st.get("ema_slow", 200)).ema_indicator()
     slope_pos = (ema200.diff().iloc[-1] > 0)
-    adx_val = ADXIndicator(d["h"], d["l"], d["c"], cfg["strategy"]["adx_len"]).adx().iloc[-1]
-    is_trend = slope_pos and adx_val > cfg["strategy"]["trend_adx_threshold"]
-    is_range = adx_val <= cfg["strategy"]["trend_adx_threshold"]
+    adx_val = ADXIndicator(d["h"], d["l"], d["c"], st.get("adx_len", 14)).adx().iloc[-1]
+    is_trend = slope_pos and adx_val > trend_adx_threshold
+    is_range = adx_val <= trend_adx_threshold
     logger.debug(
         "Regime %s: slope_pos=%s adx=%.2f threshold=%.2f -> %s",
         symbol,
         slope_pos,
         float(adx_val),
-        cfg["strategy"]["trend_adx_threshold"],
+        trend_adx_threshold,
         "trend" if is_trend else ("range" if is_range else "none"),
     )
     return ("trend" if is_trend else ("range" if is_range else "none")), float(adx_val)
@@ -792,6 +794,7 @@ def h1_signals(df, cfg, regime):
     emaS = EMAIndicator(df["c"], st["ema_slow"]).ema_indicator()
     atr  = AverageTrueRange(df["h"], df["l"], df["c"], st["atr_len"]).average_true_range()
     rsi  = RSIIndicator(df["c"], st["rsi_len"]).rsi()
+    adx  = ADXIndicator(df["h"], df["l"], df["c"], st["adx_len"]).adx()
     don_hi = df["h"].rolling(st["donchian_len"]).max()
     bb = BollingerBands(df["c"], st["bb_len"], st["bb_mult"])
     lower = bb.bollinger_lband()
@@ -801,14 +804,34 @@ def h1_signals(df, cfg, regime):
     atr_v = float(atr.iloc[-1])
     emaFv, emaSv = float(emaF.iloc[-1]), float(emaS.iloc[-1])
     rsiv = float(rsi.iloc[-1])
+    adxv = float(adx.iloc[-1])
     don_hi_prev = float(don_hi.iloc[-2]) if not math.isnan(don_hi.iloc[-2]) else None
     lower_v = float(lower.iloc[-1]) if not math.isnan(lower.iloc[-1]) else None
     mid_v   = float(mid.iloc[-1]) if not math.isnan(mid.iloc[-1]) else None
 
     signal = None
     params = {}
+    mode = str(st.get("mode", "legacy_hybrid")).lower()
 
-    if regime == "trend":
+    if mode == "mean_reversion_bb_regime":
+        adx_max = float(st.get("mr_adx_max", 24))
+        rsi_entry = float(st.get("mr_rsi_entry", st.get("rsi_mr_threshold", 35)))
+        cond = (lower_v is not None) and (close <= lower_v) and (rsiv <= rsi_entry) and (adxv <= adx_max)
+        logger.debug(
+            "MR-BB check: close=%.6f lower=%.6f rsi=%.2f<=%.2f adx=%.2f<=%.2f cond=%s",
+            close,
+            lower_v if lower_v is not None else float("nan"),
+            rsiv,
+            rsi_entry,
+            adxv,
+            adx_max,
+            cond,
+        )
+        if cond:
+            signal = "R_LONG"
+            params["sl"] = close - float(st.get("mr_sl_atr_mult", st["atr_sl_mr_mult"])) * atr_v
+            params["tp_mid"] = mid_v
+    elif regime == "trend":
         cond = (don_hi_prev is not None) and (close > don_hi_prev) and (emaFv > emaSv) and (rsiv < st["rsi_overheat"])
         logger.debug(
             "Trend check: close=%.6f don_hi_prev=%s emaF=%.6f emaS=%.6f rsi=%.2f overheat=%s cond=%s",
@@ -843,12 +866,13 @@ def h1_signals(df, cfg, regime):
     params["close"] = close
     if signal:
         logger.debug(
-            "Signal=%s close=%.6f atr=%.6f sl=%.6f regime=%s",
+            "Signal=%s close=%.6f atr=%.6f sl=%.6f regime=%s mode=%s",
             signal,
             close,
             atr_v,
             params.get("sl", 0.0),
             regime,
+            mode,
         )
     return signal, params
 
