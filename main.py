@@ -5,7 +5,7 @@ import urllib.request
 import pandas as pd
 import numpy as np
 import yaml
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from dateutil import tz
 
 import ccxt
@@ -128,7 +128,7 @@ def audit_log(csv_dir, event, payload):
     ensure_dir(csv_dir)
     fpath = os.path.join(csv_dir, "audit.log")
     rec = {
-        "ts": datetime.utcnow().isoformat() + "Z",
+        "ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "event": event,
         **(payload or {}),
     }
@@ -176,7 +176,7 @@ def safe_fetch_balance(exchange, retries=5, backoff_sec=1.0, logger=None):
         except (ccxt.NetworkError, ccxt.ExchangeNotAvailable, ccxt.RequestTimeout) as e:
             NETWORK_HEALTH["consecutive_failures"] = int(NETWORK_HEALTH.get("consecutive_failures", 0)) + 1
             NETWORK_HEALTH["last_error"] = str(e)
-            NETWORK_HEALTH["last_error_at"] = datetime.utcnow().isoformat() + "Z"
+            NETWORK_HEALTH["last_error_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
             NETWORK_HEALTH["last_label"] = "fetch_balance"
             if i < retries - 1:
                 if logger:
@@ -212,14 +212,14 @@ def call_with_retry(fn, *, retries=3, backoff_sec=1.0, logger=None, label="netwo
         try:
             out = fn()
             NETWORK_HEALTH["consecutive_failures"] = 0
-            NETWORK_HEALTH["last_ok_at"] = datetime.utcnow().isoformat() + "Z"
+            NETWORK_HEALTH["last_ok_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
             NETWORK_HEALTH["last_label"] = label
             return out
         except (ccxt.NetworkError, ccxt.ExchangeNotAvailable, ccxt.RequestTimeout) as e:
             last_err = e
             NETWORK_HEALTH["consecutive_failures"] = int(NETWORK_HEALTH.get("consecutive_failures", 0)) + 1
             NETWORK_HEALTH["last_error"] = str(e)
-            NETWORK_HEALTH["last_error_at"] = datetime.utcnow().isoformat() + "Z"
+            NETWORK_HEALTH["last_error_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
             NETWORK_HEALTH["last_label"] = label
             if attempt < retries:
                 if logger:
