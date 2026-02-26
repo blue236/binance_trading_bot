@@ -166,7 +166,7 @@ def safe_fetch_balance(exchange, retries=5, backoff_sec=1.0, logger=None):
     for i in range(retries):
         try:
             return exchange.fetch_balance()
-        except ccxt.base.errors.InvalidNonce:
+        except ccxt.InvalidNonce:
             # Binance -1021 대응
             try:
                 exchange.load_time_difference()
@@ -766,18 +766,20 @@ def fetch_ohlc(exchange, symbol, timeframe, limit=500, cfg=None, logger=None):
 def regime_filter(exchange, symbol, cfg):
     logger = logging.getLogger("bot")
     tf = cfg["general"]["timeframe_regime"]
+    st = cfg.get("strategy", {})
+    trend_adx_threshold = float(st.get("trend_adx_threshold", 20.0))
     d = fetch_ohlc(exchange, symbol, tf, 400, cfg=cfg, logger=logger)
-    ema200 = EMAIndicator(d["c"], cfg["strategy"]["ema_slow"]).ema_indicator()
+    ema200 = EMAIndicator(d["c"], st.get("ema_slow", 200)).ema_indicator()
     slope_pos = (ema200.diff().iloc[-1] > 0)
-    adx_val = ADXIndicator(d["h"], d["l"], d["c"], cfg["strategy"]["adx_len"]).adx().iloc[-1]
-    is_trend = slope_pos and adx_val > cfg["strategy"]["trend_adx_threshold"]
-    is_range = adx_val <= cfg["strategy"]["trend_adx_threshold"]
+    adx_val = ADXIndicator(d["h"], d["l"], d["c"], st.get("adx_len", 14)).adx().iloc[-1]
+    is_trend = slope_pos and adx_val > trend_adx_threshold
+    is_range = adx_val <= trend_adx_threshold
     logger.debug(
         "Regime %s: slope_pos=%s adx=%.2f threshold=%.2f -> %s",
         symbol,
         slope_pos,
         float(adx_val),
-        cfg["strategy"]["trend_adx_threshold"],
+        trend_adx_threshold,
         "trend" if is_trend else ("range" if is_range else "none"),
     )
     return ("trend" if is_trend else ("range" if is_range else "none")), float(adx_val)
