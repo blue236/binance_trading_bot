@@ -64,13 +64,37 @@ def build_summary_text(cfg, state, equity_now, base_ccy, now_ts=None, running=Tr
 
     mode_label = "STOPPED" if not running and not paused else ("PAUSED" if paused else "RUNNING")
 
+    pos_details = []
+    for i, (sym, pos) in enumerate((positions or {}).items()):
+        if i >= 5:
+            break
+        p = pos if isinstance(pos, dict) else {}
+        entry = p.get("entry_price")
+        current = p.get("current_price", p.get("last_price"))
+        try:
+            entry_txt = f"{float(entry):.4f}" if entry is not None else "n/a"
+        except Exception:
+            entry_txt = "n/a"
+        try:
+            current_txt = f"{float(current):.4f}" if current is not None else "n/a"
+        except Exception:
+            current_txt = "n/a"
+        pos_details.append(f"- {sym}: buy={entry_txt} | now={current_txt}")
+
+    pos_block = "\nPosition detail:\n"
+    if pos_details:
+        pos_block += "\n".join(pos_details)
+    else:
+        pos_block += "- (no open positions)"
+
     return (
         "📌 Ops Summary\n"
         f"Mode: {mode_label} / {runtime_mode} | dry_run={cfg.get('general', {}).get('dry_run')} | approval={'ON' if approval else 'OFF'}\n"
         f"Equity: {float(equity_now):.2f} {base_ccy}"
         + (f" (start {session_eq:.2f})\n" if session_eq is not None else "\n")
         + f"Profit-rate: {pnl_line}\n"
-        + f"Positions: {len(positions)}/{max_pos if max_pos > 0 else '-'} | cooldown_active={cooldown_active}\n"
+        + f"Positions: {len(positions)}/{max_pos if max_pos > 0 else '-'} | cooldown_active={cooldown_active}"
+        + pos_block + "\n"
         + f"Risk gate: daily_loss_stop={risk.get('daily_loss_stop_pct')}% | pending_change={'YES' if bool(state.get('pending_change')) else 'NO'}\n"
         + f"Health: network={network_label} (fail={net_failures}) | last_loop={last_loop_at}\n"
         + f"Updated: {now_str}"

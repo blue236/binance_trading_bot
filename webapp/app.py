@@ -709,6 +709,19 @@ def _server_summary_text() -> str:
         session = state.get("session") if isinstance(state.get("session"), dict) else {}
         equity_now = float(session.get("equity_start") or 0.0)
 
+    # Enrich open-position summary with latest known price from chart DB.
+    try:
+        tf = str((cfg.get("general") or {}).get("timeframe_signal") or "1h")
+        positions = state.get("positions") if isinstance(state.get("positions"), dict) else {}
+        for sym, pos in positions.items():
+            if not isinstance(pos, dict):
+                continue
+            rows = storage.fetch_ohlcv(sym, tf, 1)
+            if rows:
+                pos["current_price"] = float(rows[-1][4])
+    except Exception:
+        pass
+
     return build_summary_text(
         cfg,
         state,
