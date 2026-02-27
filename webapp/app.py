@@ -12,6 +12,7 @@ import time
 import base64
 import threading
 import datetime as dt
+import secrets
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from pathlib import Path
 from typing import Dict
@@ -30,6 +31,7 @@ from .storage import Storage
 from .chart_service import ChartService
 from .backtest_service import BacktestService
 from credentials import load_credentials, save_credentials
+from telegram_shared import build_summary_text, HELP_TEXT
 
 # Reuse legacy backtester web helpers to stay compatible with existing CLI options.
 from web_backtester_ui import DEFAULTS as LEGACY_BT_DEFAULTS, build_command as legacy_build_command, validate_values as legacy_validate_values, list_plot_files
@@ -386,7 +388,12 @@ def _append_inbox(chat_id: str, text: str) -> None:
 
 
 def _poll_server_telegram_commands() -> None:
-    # Unified Telegram command handler at web server level.
+    # Web server is the single Telegram poll owner by default.
+    cfg = _load_main_cfg()
+    poll_owner = str((cfg.get("alerts") or {}).get("telegram_polling_owner", "webapp") or "webapp").strip().lower()
+    if poll_owner not in ("webapp", "server"):
+        return
+
     d = _load_secrets()
     token = str(d.get("telegram_bot_token", "") or "").strip()
     chat_id = str(d.get("telegram_chat_id", "") or "").strip()
@@ -407,17 +414,29 @@ def _poll_server_telegram_commands() -> None:
         c = str((msg.get("chat") or {}).get("id", "")).strip()
         if c != chat_id:
             continue
-        text = str(msg.get("text") or "").strip().lower()
+
+        raw_text = str(msg.get("text") or "").strip()
+        text = raw_text.lower()
         if not text.startswith("/"):
             continue
 
-        cfg = _load_main_cfg()
         state = _load_main_state(cfg)
         owner_user_id = str((cfg.get("alerts") or {}).get("telegram_owner_user_id", "") or "").strip()
         msg_user_id = str((msg.get("from") or {}).get("id", "") or "").strip()
         owner_ok = bool(owner_user_id) and (msg_user_id == owner_user_id)
         parts = text.split()
         cmd = parts[0].lower() if parts else ""
+
+        if cmd in ("/approve", "/deny"):
+            _append_inbox(chat_id, text)
+            continue
+
+        owner_only_cmds = {
+            "/start", "/stop", "/restart", "/setrisk", "/setmaxpos", "/confirm", "/cancel", "/pause", "/resume"
+        }
+        if cmd in owner_only_cmds and not owner_ok:
+            _notify_telegram("Owner-only command.")
+            continue
 
         if cmd == "/start":
             result = _set_ai_running(True, "Telegram command")
@@ -431,6 +450,8 @@ def _poll_server_telegram_commands() -> None:
             _notify_telegram(_server_status_text())
         elif cmd == "/summary":
             _notify_telegram(_server_summary_text())
+        elif cmd == "/help":
+            _notify_telegram(HELP_TEXT)
         elif cmd == "/health":
             _notify_telegram(_server_health_text())
         elif cmd == "/positions":
@@ -451,49 +472,48 @@ def _poll_server_telegram_commands() -> None:
                 f"max_concurrent_positions: {risk.get('max_concurrent_positions')}\n"
                 f"cooldown_hours: {risk.get('cooldown_hours')}"
             )
-        elif cmd == "/restart":
-            if not owner_ok:
-                _notify_telegram("Owner-only command.")
-                continue
-            token_c = f"r{int(time.time()) % 100000:05d}"
-            state["pending_change"] = {
-                "cmd": "restart",
-                "value": "now",
+        elif cmd in ("/restart", "/setrisk", "/setmaxpos"):
+            token_c = secrets.token_hex(3)
+            pending = {
+                "cmd": cmd.lstrip("/"),
                 "token": token_c,
                 "requested_at": time.time(),
                 "expires_at": int(time.time()) + 120,
                 "user_id": msg_user_id,
             }
-            _write_main_state(cfg, state)
-            _notify_telegram(f"Pending change: restart -> now\nReply /confirm {token_c} to apply (expires in 120s) or /cancel")
-        elif cmd == "/setrisk":
-            if len(parts) < 2:
-                _notify_telegram("Usage: /setrisk <percent>")
-            else:
+            if cmd == "/restart":
+                pending["value"] = "now"
+            elif cmd == "/setrisk":
+                if len(parts) < 2:
+                    _notify_telegram("Usage: /setrisk <percent>")
+                    continue
                 try:
                     v = float(parts[1])
                     if v < 0.05 or v > 5.0:
                         raise ValueError("range")
-                    pending = {"cmd": "setrisk", "value": v, "requested_at": time.time()}
-                    state["pending_change"] = pending
-                    _write_main_state(cfg, state)
-                    _notify_telegram(f"Pending change: setrisk -> {v}\nReply /confirm to apply or /cancel to discard.")
                 except Exception:
                     _notify_telegram("Invalid risk. Allowed range: 0.05 ~ 5.0")
-        elif cmd == "/setmaxpos":
-            if len(parts) < 2:
-                _notify_telegram("Usage: /setmaxpos <n>")
+                    continue
+                pending["value"] = v
             else:
+                if len(parts) < 2:
+                    _notify_telegram("Usage: /setmaxpos <n>")
+                    continue
                 try:
                     v = int(parts[1])
                     if v < 1 or v > 20:
                         raise ValueError("range")
-                    pending = {"cmd": "setmaxpos", "value": v, "requested_at": time.time()}
-                    state["pending_change"] = pending
-                    _write_main_state(cfg, state)
-                    _notify_telegram(f"Pending change: setmaxpos -> {v}\nReply /confirm to apply or /cancel to discard.")
                 except Exception:
                     _notify_telegram("Invalid max positions. Allowed range: 1 ~ 20")
+                    continue
+                pending["value"] = v
+
+            state["pending_change"] = pending
+            _write_main_state(cfg, state)
+            _notify_telegram(
+                f"Pending change: {pending['cmd']} -> {pending['value']}\n"
+                f"Reply /confirm {token_c} to apply (expires in 120s) or /cancel"
+            )
         elif cmd == "/confirm":
             pending = state.get("pending_change") or {}
             pcmd = pending.get("cmd")
@@ -501,17 +521,20 @@ def _poll_server_telegram_commands() -> None:
             token_in = parts[1].strip().lower() if len(parts) >= 2 else ""
             if not pcmd:
                 _notify_telegram("No pending change.")
-            elif int(time.time()) > int(pending.get("expires_at", 2**31)):
+                continue
+            if not token_in:
+                _notify_telegram("Usage: /confirm <token>")
+                continue
+            if token_in != str(pending.get("token", "")).lower() or msg_user_id != str(pending.get("user_id", "")):
+                _notify_telegram("Invalid confirm token.")
+                continue
+            if int(time.time()) > int(pending.get("expires_at", 0)):
                 state.pop("pending_change", None)
                 _write_main_state(cfg, state)
                 _notify_telegram("Pending change expired. Please request again.")
-            elif pcmd == "restart":
-                if not owner_ok:
-                    _notify_telegram("Owner-only command.")
-                    continue
-                if not token_in or token_in != str(pending.get("token", "")).lower() or msg_user_id != str(pending.get("user_id", "")):
-                    _notify_telegram("Invalid confirm token.")
-                    continue
+                continue
+
+            if pcmd == "restart":
                 state.pop("pending_change", None)
                 _write_main_state(cfg, state)
                 _notify_telegram("♻️ Restarting AI bot now...")
@@ -535,6 +558,10 @@ def _poll_server_telegram_commands() -> None:
                 _write_main_state(cfg, state)
                 _notify_telegram(f"✅ max_concurrent_positions updated: {old} -> {pval}")
         elif cmd == "/cancel":
+            pending = state.get("pending_change") or {}
+            if pending and msg_user_id != str(pending.get("user_id", "")):
+                _notify_telegram("Only the requester can cancel this pending change.")
+                continue
             state.pop("pending_change", None)
             _write_main_state(cfg, state)
             _notify_telegram("Cancelled pending change.")
@@ -546,10 +573,6 @@ def _poll_server_telegram_commands() -> None:
             state["bot_paused"] = False
             _write_main_state(cfg, state)
             _notify_telegram("▶️ Bot resumed.")
-        elif cmd == "/help":
-            _notify_telegram("Available commands: /status, /summary, /health, /positions, /risk, /setrisk, /setmaxpos, /restart, /confirm, /cancel, /pause, /resume, /start, /stop, /help")
-        elif text.startswith("approve ") or text.startswith("deny ") or text.startswith("/approve ") or text.startswith("/deny "):
-            _append_inbox(chat_id, text)
 
     if new_offset is not None:
         _save_offset(new_offset)
@@ -667,18 +690,32 @@ def _server_status_text() -> str:
 def _server_summary_text() -> str:
     cfg = _load_main_cfg()
     state = _load_main_state(cfg)
-    risk = cfg.get("risk") or {}
-    positions = state.get("positions") or {}
-    runtime_mode = state.get("runtime_mode", "aggressive" if (cfg.get("general") or {}).get("aggressive_mode") else "normal")
-    approval = bool((cfg.get("alerts") or {}).get("enable_trade_approval", False))
-    return (
-        "📌 Summary\n"
-        f"runtime_mode: {runtime_mode}\n"
-        f"approval: {'ON' if approval else 'OFF'}\n"
-        f"risk_pct: {risk.get('per_trade_risk_pct')}\n"
-        f"max_pos: {risk.get('max_concurrent_positions')}\n"
-        f"cooldown_h: {risk.get('cooldown_hours')}\n"
-        f"open_positions: {len(positions)}"
+    base = (cfg.get("general") or {}).get("base_currency") or "USDT"
+
+    equity_now = None
+    try:
+        csv_dir = Path((cfg.get("logging") or {}).get("csv_dir") or "./logs")
+        eq_file = csv_dir / "equity.csv"
+        if eq_file.exists():
+            rows = [ln for ln in eq_file.read_text(errors="ignore").splitlines() if ln.strip()]
+            if len(rows) >= 2:
+                last = rows[-1].split(",")
+                if len(last) >= 2:
+                    equity_now = float(last[1])
+    except Exception:
+        equity_now = None
+
+    if equity_now is None:
+        session = state.get("session") if isinstance(state.get("session"), dict) else {}
+        equity_now = float(session.get("equity_start") or 0.0)
+
+    return build_summary_text(
+        cfg,
+        state,
+        equity_now=float(equity_now),
+        base_ccy=base,
+        now_ts=dt.datetime.now(dt.timezone.utc),
+        running=_is_ai_running(),
     )
 
 
