@@ -35,6 +35,13 @@
     .interactive-target-active{outline:3px solid #93c5fd !important;outline-offset:2px;box-shadow:0 0 0 4px rgba(59,130,246,.18) !important;transition:outline-color .15s, box-shadow .15s}
     button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,th.sortable:focus-visible{outline:3px solid #60a5fa;outline-offset:2px}
     img.plot{max-width:280px;border:1px solid #ddd;border-radius:8px;margin:6px}
+    .chart-enlargeable{cursor:zoom-in}
+    .chart-fs-overlay{position:fixed;inset:0;background:rgba(0,0,0,.72);display:none;align-items:center;justify-content:center;z-index:1000;padding:20px}
+    .chart-fs-overlay.show{display:flex}
+    .chart-fs-card{background:#fff;border-radius:12px;width:min(96vw,1600px);height:min(94vh,1000px);padding:14px;box-shadow:0 12px 30px rgba(0,0,0,.35);display:flex;flex-direction:column;gap:8px}
+    .chart-fs-head{display:flex;justify-content:space-between;align-items:center}
+    .chart-fs-canvas-wrap{flex:1;min-height:0}
+    .chart-fs-canvas-wrap canvas{width:100% !important;height:100% !important}
     @media (max-width: 768px){
       body{margin:10px}
       h1{font-size:1.2rem}
@@ -101,7 +108,7 @@
     </div>
 
     <div class="card">
-      <canvas id="priceChart" height="100"></canvas>
+      <canvas id="priceChart" class="chart-enlargeable" height="100" title="Click to enlarge"></canvas>
       <div class="muted" id="priceMarkerStatus">Signals: (none)</div>
     </div>
 
@@ -159,7 +166,7 @@
 
     <div class="card">
       <h3>Backtest Chart (marker overlay: BUY/SELL)</h3>
-      <canvas id="btUnifiedChart" height="110"></canvas>
+      <canvas id="btUnifiedChart" class="chart-enlargeable" height="110" title="Click to enlarge"></canvas>
       <div id="btMarkerTooltip" class="marker-tooltip"></div>
       <div class="muted" id="btMarkerStatus">Markers: (none)</div>
     </div>
@@ -174,9 +181,66 @@
     </div>
   </section>
 
+  <div id="chartFsOverlay" class="chart-fs-overlay" aria-hidden="true">
+    <div class="chart-fs-card" role="dialog" aria-modal="true" aria-label="Enlarged chart">
+      <div class="chart-fs-head">
+        <strong id="chartFsTitle">Chart</strong>
+        <button id="chartFsClose" type="button">Close</button>
+      </div>
+      <div class="chart-fs-canvas-wrap">
+        <canvas id="chartFsCanvas"></canvas>
+      </div>
+    </div>
+  </div>
+
 <script>
   const initialConfig = {{ config | tojson }};
   let chart;
+  let fsChart;
+
+  function closeFullscreenChart(){
+    const overlay=document.getElementById('chartFsOverlay');
+    overlay.classList.remove('show');
+    overlay.setAttribute('aria-hidden','true');
+    if(fsChart){ fsChart.destroy(); fsChart=null; }
+  }
+
+  function openFullscreenChart(kind){
+    const source = kind==='price' ? chart : btChart;
+    if(!source) return;
+    const overlay=document.getElementById('chartFsOverlay');
+    const title=document.getElementById('chartFsTitle');
+    const ctx=document.getElementById('chartFsCanvas');
+
+    title.textContent = kind==='price' ? 'Price Chart (enlarged)' : 'Backtest Chart (enlarged)';
+    overlay.classList.add('show');
+    overlay.setAttribute('aria-hidden','false');
+
+    const data=JSON.parse(JSON.stringify(source.data || {}));
+    const options=JSON.parse(JSON.stringify(source.options || {}));
+    options.responsive = true;
+    options.maintainAspectRatio = false;
+
+    if(fsChart){ fsChart.destroy(); }
+    fsChart = new Chart(ctx, {
+      type: source.config?.type || 'line',
+      data,
+      options,
+      plugins: source.config?.plugins || []
+    });
+  }
+
+  function setupChartFullscreen(){
+    const p=document.getElementById('priceChart');
+    const b=document.getElementById('btUnifiedChart');
+    const overlay=document.getElementById('chartFsOverlay');
+    const closeBtn=document.getElementById('chartFsClose');
+    if(p) p.addEventListener('click',()=>openFullscreenChart('price'));
+    if(b) b.addEventListener('click',()=>openFullscreenChart('backtest'));
+    closeBtn?.addEventListener('click', closeFullscreenChart);
+    overlay?.addEventListener('click',(e)=>{ if(e.target===overlay) closeFullscreenChart(); });
+    document.addEventListener('keydown',(e)=>{ if(e.key==='Escape') closeFullscreenChart(); });
+  }
 
   async function withButtonProgress(buttonOrId, busyText, action, opts={}){
     const btn = typeof buttonOrId === 'string' ? document.getElementById(buttonOrId) : buttonOrId;
@@ -705,6 +769,7 @@
 
   setupInteractiveUi();
   setupSymbols();
+  setupChartFullscreen();
   loadChart('{{ default_symbol }}');
   updateAiStatus();
   refreshAiLogs();
