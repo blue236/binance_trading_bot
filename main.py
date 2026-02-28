@@ -146,13 +146,13 @@ def connect_exchange(cfg):
         "enableRateLimit": True,
         "options": {
             "defaultType": "spot",
-            "adjustForTimeDifference": True,  # Binance 서버 시간에 맞춰 자동 보정
+            "adjustForTimeDifference": True,  # auto-sync with Binance server time
         },
     })
 
-    # 추가: 시작 시 시간차를 여러 번 잡아 안정화
+    # Extra startup stabilization: re-check server time delta several times
     for _ in range(3):
-        # 서버와 시간 차이 미리 계산 (Optional but recommended)
+        # Pre-calculate server time difference (optional but recommended)
         try:
             exchange.load_time_difference()
             break
@@ -168,12 +168,12 @@ def safe_fetch_balance(exchange, retries=5, backoff_sec=1.0, logger=None):
         try:
             return exchange.fetch_balance()
         except ccxt.InvalidNonce:
-            # Binance -1021 대응
+            # Handle Binance -1021 time-sync nonce errors
             try:
                 exchange.load_time_difference()
             except Exception:
                 pass
-            time.sleep(1 + i)   # 점진적 backoff
+            time.sleep(1 + i)   # progressive backoff
         except (ccxt.NetworkError, ccxt.ExchangeNotAvailable, ccxt.RequestTimeout) as e:
             NETWORK_HEALTH["consecutive_failures"] = int(NETWORK_HEALTH.get("consecutive_failures", 0)) + 1
             NETWORK_HEALTH["last_error"] = str(e)
@@ -187,7 +187,7 @@ def safe_fetch_balance(exchange, retries=5, backoff_sec=1.0, logger=None):
             if logger:
                 logger.error("fetch_balance failed after %d retries: %s", retries, str(e))
             raise
-    # 끝까지 실패하면 마지막 예외 다시 raise
+    # If all retries fail, raise the last exception
     return exchange.fetch_balance()
 
 

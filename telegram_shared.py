@@ -69,17 +69,35 @@ def build_summary_text(cfg, state, equity_now, base_ccy, now_ts=None, running=Tr
         if i >= 5:
             break
         p = pos if isinstance(pos, dict) else {}
+        qty = p.get("qty")
         entry = p.get("entry_price")
         current = p.get("current_price", p.get("last_price"))
+
         try:
-            entry_txt = f"{float(entry):.4f}" if entry is not None else "n/a"
+            qty_txt = f"{float(qty):.6f}" if qty is not None else "n/a"
         except Exception:
+            qty_txt = "n/a"
+        try:
+            entry_v = float(entry) if entry is not None else None
+            entry_txt = f"{entry_v:.4f}" if entry_v is not None else "n/a"
+        except Exception:
+            entry_v = None
             entry_txt = "n/a"
         try:
-            current_txt = f"{float(current):.4f}" if current is not None else "n/a"
+            current_v = float(current) if current is not None else None
+            current_txt = f"{current_v:.4f}" if current_v is not None else "n/a"
         except Exception:
+            current_v = None
             current_txt = "n/a"
-        pos_details.append(f"- {sym}: buy={entry_txt} | now={current_txt}")
+
+        yield_txt = "n/a"
+        if entry_v is not None and current_v is not None and entry_v > 0:
+            y = ((current_v - entry_v) / entry_v) * 100.0
+            yield_txt = f"{y:+.2f}%"
+
+        pos_details.append(
+            f"- {sym}: amount={qty_txt} | buy price={entry_txt} | now={current_txt} | yield={yield_txt}"
+        )
 
     pos_block = "\nPosition detail:\n"
     if pos_details:

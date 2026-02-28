@@ -63,8 +63,8 @@
   </div>
 
   <div class="interactive-help" id="interactiveHelp" aria-live="polite">
-    <strong>도움말</strong>
-    <span id="helpText">버튼/입력 필드를 클릭하거나 포커스하면 해당 요소 설명이 여기에 표시됩니다.</span>
+    <strong>Help</strong>
+    <span id="helpText">Click or focus a button/input field to see a description here.</span>
   </div>
 
   <section id="aiTab" class="tab active">
@@ -217,51 +217,51 @@
     let activeEl=null;
 
     const helpById={
-      aiStart:'AI 자동매매 봇을 시작합니다.',
-      aiStop:'실행 중인 AI 자동매매 봇을 중지합니다.',
-      aiLogRefresh:'AI 로그를 즉시 새로고침합니다.',
-      aiLogNew:'현재 로그를 백업(.bak)하고 새 로그 파일을 시작합니다.',
-      aiLogDownload:'현재 AI 로그 파일을 다운로드합니다.',
-      aiLogLines:'로그 조회 시 가져올 줄 수를 선택합니다.',
-      symbol:'차트 조회 심볼을 선택합니다.',
-      refreshBtn:'선택 심볼의 차트 데이터를 갱신합니다.',
-      configBtn:'웹 UI 설정 패널을 열거나 닫습니다.',
-      cfgSymbols:'웹 UI에서 사용할 심볼 목록(csv)을 입력합니다.',
-      cfgTf:'기본 타임프레임 값을 설정합니다.',
-      cfgLimit:'차트 히스토리 조회 개수를 설정합니다.',
-      cfgCron:'백그라운드 갱신 주기(cron)를 설정합니다.',
-      cfgLoad:'서버 설정 파일을 불러옵니다.',
-      cfgSave:'현재 웹 UI 설정을 저장합니다.',
-      aiCfgRaw:'legacy main.py용 config.yaml 내용을 편집합니다.',
-      aiCfgReload:'config.yaml 내용을 다시 불러옵니다.',
-      aiCfgSave:'편집한 config.yaml을 저장합니다(민감정보 분리).',
-      secApiKey:'Binance API Key를 입력합니다.',
-      secApiSecret:'Binance API Secret을 입력합니다.',
-      secTgToken:'텔레그램 봇 토큰을 입력합니다.',
-      secTgChat:'텔레그램 채팅 ID를 입력합니다.',
-      secSave:'입력한 시크릿 정보를 암호화 저장합니다.',
-      btMode:'백테스트 엔진 실행 모드를 선택합니다.',
-      btSymbol:'백테스트 심볼을 선택합니다.',
-      btTf:'백테스트 타임프레임을 입력합니다.',
-      btFast:'빠른 이동평균 기간을 설정합니다.',
-      btSlow:'느린 이동평균 기간을 설정합니다.',
-      btUnifiedRun:'통합 백테스트를 실행합니다.',
-      lSymbols:'legacy 백테스터 대상 심볼 목록입니다.',
-      lTf:'legacy 백테스터 타임프레임입니다.',
-      lLimit:'legacy 백테스터 데이터 개수 제한입니다.',
-      lWin:'legacy 전략 윈도우 파라미터입니다.',
-      lThr:'legacy 전략 임계값 파라미터입니다.',
-      lStrategy:'legacy 백테스터 전략 이름입니다.',
-      legacyRun:'legacy backtester.py를 실행합니다.'
+      aiStart:'Start the AI auto-trading bot.',
+      aiStop:'Stop the currently running AI auto-trading bot.',
+      aiLogRefresh:'Refresh AI logs immediately.',
+      aiLogNew:'Back up current log (.bak) and start a new log file.',
+      aiLogDownload:'Download the current AI log file.',
+      aiLogLines:'Select how many log lines to fetch.',
+      symbol:'Select the symbol for chart view.',
+      refreshBtn:'Refresh chart data for the selected symbol.',
+      configBtn:'Open or close the Web UI config panel.',
+      cfgSymbols:'Enter symbol list (csv) for the Web UI.',
+      cfgTf:'Set the default timeframe.',
+      cfgLimit:'Set chart history limit.',
+      cfgCron:'Set background refresh schedule (cron).',
+      cfgLoad:'Load server config file.',
+      cfgSave:'Save current Web UI config.',
+      aiCfgRaw:'Edit config.yaml for legacy main.py.',
+      aiCfgReload:'Reload config.yaml content.',
+      aiCfgSave:'Save edited config.yaml (with secret separation).',
+      secApiKey:'Enter Binance API Key.',
+      secApiSecret:'Enter Binance API Secret.',
+      secTgToken:'Enter Telegram bot token.',
+      secTgChat:'Enter Telegram chat ID.',
+      secSave:'Encrypt and save provided secrets.',
+      btMode:'Choose backtest engine mode.',
+      btSymbol:'Choose backtest symbol.',
+      btTf:'Enter backtest timeframe.',
+      btFast:'Set fast moving-average period.',
+      btSlow:'Set slow moving-average period.',
+      btUnifiedRun:'Run unified backtest.',
+      lSymbols:'Target symbol list for legacy backtester.',
+      lTf:'Timeframe for legacy backtester.',
+      lLimit:'Data size limit for legacy backtester.',
+      lWin:'Window parameter for legacy strategy.',
+      lThr:'Threshold parameter for legacy strategy.',
+      lStrategy:'Strategy name for legacy backtester.',
+      legacyRun:'Run legacy backtester.py.'
     };
 
     const labelFor=(el)=>{
-      if(!el) return '요소';
+      if(!el) return 'element';
       if(el.dataset?.help) return el.dataset.help;
       if(el.id && helpById[el.id]) return helpById[el.id];
-      if(el.classList?.contains('tab-btn')) return `탭 전환: ${el.textContent.trim()} 화면으로 이동합니다.`;
-      if(el.matches('th.sortable')) return `${el.textContent.trim()} 기준으로 비교 테이블을 정렬합니다.`;
-      return `${el.tagName.toLowerCase()} 요소: ${el.textContent?.trim() || el.placeholder || el.name || '입력/실행'} 관련 동작입니다.`;
+      if(el.classList?.contains('tab-btn')) return `Tab switch: move to ${el.textContent.trim()} screen.`;
+      if(el.matches('th.sortable')) return `Sort comparison table by ${el.textContent.trim()}.`;
+      return `${el.tagName.toLowerCase()} element: ${el.textContent?.trim() || el.placeholder || el.name || 'input/action'} related behavior.`;
     };
 
     const setActive=(el)=>{
@@ -366,7 +366,7 @@
     const note=(j.signal_note||'').trim();
     const status=document.getElementById('priceMarkerStatus');
     if(markers.length){
-      status.textContent=`Signals: BUY/SELL ${markers.length}건 · basis=${j.signal_basis||'config crossover'} · fast=${p.fast ?? '-'}, slow=${p.slow ?? '-'}${note ? ` · ${note}` : ''}`;
+      status.textContent=`Signals: BUY/SELL ${markers.length} events · basis=${j.signal_basis||'config crossover'} · fast=${p.fast ?? '-'}, slow=${p.slow ?? '-'}${note ? ` · ${note}` : ''}`;
     }else{
       status.textContent=`Signals: (none) · basis=${j.signal_basis||'config crossover'} · fast=${p.fast ?? '-'}, slow=${p.slow ?? '-'}${note ? ` · ${note}` : ''}`;
     }
