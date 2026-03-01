@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Binance Trading Bot - Unified Web UI</title>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
   <style>
     body{font-family:Arial,Helvetica,sans-serif;margin:20px;background:#f6f7fb}
     .tabs{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap}
@@ -35,6 +36,18 @@
     .interactive-target-active{outline:3px solid #93c5fd !important;outline-offset:2px;box-shadow:0 0 0 4px rgba(59,130,246,.18) !important;transition:outline-color .15s, box-shadow .15s}
     button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,th.sortable:focus-visible{outline:3px solid #60a5fa;outline-offset:2px}
     img.plot{max-width:280px;border:1px solid #ddd;border-radius:8px;margin:6px}
+    .chart-enlargeable{cursor:zoom-in}
+    .chart-fs-overlay{position:fixed;inset:0;background:rgba(0,0,0,.72);display:none;align-items:center;justify-content:center;z-index:1000;padding:20px}
+    .chart-fs-overlay.show{display:flex}
+    .chart-fs-card{background:#fff;border-radius:12px;width:min(96vw,1600px);height:min(94vh,1000px);padding:14px;box-shadow:0 12px 30px rgba(0,0,0,.35);display:flex;flex-direction:column;gap:8px}
+    .chart-fs-head{display:flex;justify-content:space-between;align-items:center}
+    .chart-fs-canvas-wrap{flex:1;min-height:0}
+    .chart-fs-canvas-wrap canvas{width:100% !important;height:100% !important}
+    .chart-toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px}
+    .chart-toolbar button{padding:7px 10px;min-height:36px;background:#334155}
+    .chart-toolbar button.active{background:#2563eb}
+    .chart-toolbar .chip{background:#e2e8f0;color:#1f2937;border-radius:999px;padding:6px 10px;font-size:12px}
+    .hover-panel{background:#f8fafc;border:1px solid #cbd5e1;border-radius:8px;padding:8px 10px;font-size:12px;color:#0f172a;margin-top:8px}
     @media (max-width: 768px){
       body{margin:10px}
       h1{font-size:1.2rem}
@@ -63,8 +76,8 @@
   </div>
 
   <div class="interactive-help" id="interactiveHelp" aria-live="polite">
-    <strong>도움말</strong>
-    <span id="helpText">버튼/입력 필드를 클릭하거나 포커스하면 해당 요소 설명이 여기에 표시됩니다.</span>
+    <strong>Help</strong>
+    <span id="helpText">Click or focus a button/input field to see a description here.</span>
   </div>
 
   <section id="aiTab" class="tab active">
@@ -101,8 +114,24 @@
     </div>
 
     <div class="card">
-      <canvas id="priceChart" height="100"></canvas>
+      <div class="chart-toolbar">
+        <span class="chip">Timeframe</span>
+        <button id="tf15m" type="button">15m</button>
+        <button id="tf1h" type="button" class="active">1h</button>
+        <button id="tf4h" type="button">4h</button>
+        <button id="tf1d" type="button">1d</button>
+        <span class="chip">Overlays</span>
+        <button id="toggleMarkers" type="button" class="active">Markers</button>
+        <button id="toggleEma" type="button" class="active">EMA</button>
+        <button id="toggleBb" type="button">BB</button>
+        <button id="toggleVolume" type="button">Volume</button>
+        <button id="resetZoom" type="button">Reset Zoom</button>
+        <button id="downloadChart" type="button">Download PNG</button>
+      </div>
+      <canvas id="priceChart" class="chart-enlargeable" height="110" title="Click to enlarge"></canvas>
+      <div class="hover-panel" id="priceHoverInfo">Hover crosshair info: -</div>
       <div class="muted" id="priceMarkerStatus">Signals: (none)</div>
+      <div class="muted">Controls: Mouse wheel zoom · Shift + drag pan · Hover to inspect candle/signal context.</div>
     </div>
 
     <div class="card" id="configPanel" style="display:none;">
@@ -159,7 +188,7 @@
 
     <div class="card">
       <h3>Backtest Chart (marker overlay: BUY/SELL)</h3>
-      <canvas id="btUnifiedChart" height="110"></canvas>
+      <canvas id="btUnifiedChart" class="chart-enlargeable" height="110" title="Click to enlarge"></canvas>
       <div id="btMarkerTooltip" class="marker-tooltip"></div>
       <div class="muted" id="btMarkerStatus">Markers: (none)</div>
     </div>
@@ -174,9 +203,82 @@
     </div>
   </section>
 
+  <div id="chartFsOverlay" class="chart-fs-overlay" aria-hidden="true">
+    <div class="chart-fs-card" role="dialog" aria-modal="true" aria-label="Enlarged chart">
+      <div class="chart-fs-head">
+        <strong id="chartFsTitle">Chart</strong>
+        <button id="chartFsClose" type="button">Close</button>
+      </div>
+      <div class="chart-fs-canvas-wrap">
+        <canvas id="chartFsCanvas"></canvas>
+      </div>
+    </div>
+  </div>
+
 <script>
   const initialConfig = {{ config | tojson }};
   let chart;
+  let fsChart;
+  let priceChartLoadSeq = 0;
+  let activeTimeframe = initialConfig.timeframe || '1h';
+  const chartUiState = {showMarkers:true, showEma:true, showBb:false, showVolume:false};
+  const STABLE_CHART_MODE = true; // hotfix mode: prioritize reliability over advanced interactions
+
+  function closeFullscreenChart(){
+    const overlay=document.getElementById('chartFsOverlay');
+    overlay.classList.remove('show');
+    overlay.setAttribute('aria-hidden','true');
+    if(fsChart){ safeDestroyChart(fsChart); fsChart=null; }
+  }
+
+  function openFullscreenChart(kind){
+    const source = kind==='price' ? chart : btChart;
+    if(!source) return;
+    const overlay=document.getElementById('chartFsOverlay');
+    const title=document.getElementById('chartFsTitle');
+    const ctx=document.getElementById('chartFsCanvas');
+
+    title.textContent = kind==='price' ? 'Price Chart (enlarged)' : 'Backtest Chart (enlarged)';
+    overlay.classList.add('show');
+    overlay.setAttribute('aria-hidden','false');
+
+    const data=JSON.parse(JSON.stringify(source.data || {}));
+    const options=JSON.parse(JSON.stringify(source.options || {}));
+    options.responsive = true;
+    options.maintainAspectRatio = false;
+
+    if(fsChart){ safeDestroyChart(fsChart); }
+    try{
+      fsChart = new Chart(ctx, {
+        type: source.config?.type || 'line',
+        data,
+        options,
+        plugins: source.config?.plugins || []
+      });
+    } catch(err){
+      console.warn('Fullscreen chart render failed with plugins; retrying safe mode.', err);
+      const safePlugins={...(options.plugins||{})};
+      delete safePlugins.zoom;
+      fsChart = new Chart(ctx, {
+        type: source.config?.type || 'line',
+        data,
+        options:{...options, plugins:safePlugins, interaction:{mode:'nearest',intersect:false}},
+        plugins: []
+      });
+    }
+  }
+
+  function setupChartFullscreen(){
+    const p=document.getElementById('priceChart');
+    const b=document.getElementById('btUnifiedChart');
+    const overlay=document.getElementById('chartFsOverlay');
+    const closeBtn=document.getElementById('chartFsClose');
+    if(p) p.addEventListener('click',()=>openFullscreenChart('price'));
+    if(b) b.addEventListener('click',()=>openFullscreenChart('backtest'));
+    closeBtn?.addEventListener('click', closeFullscreenChart);
+    overlay?.addEventListener('click',(e)=>{ if(e.target===overlay) closeFullscreenChart(); });
+    document.addEventListener('keydown',(e)=>{ if(e.key==='Escape') closeFullscreenChart(); });
+  }
 
   async function withButtonProgress(buttonOrId, busyText, action, opts={}){
     const btn = typeof buttonOrId === 'string' ? document.getElementById(buttonOrId) : buttonOrId;
@@ -217,51 +319,51 @@
     let activeEl=null;
 
     const helpById={
-      aiStart:'AI 자동매매 봇을 시작합니다.',
-      aiStop:'실행 중인 AI 자동매매 봇을 중지합니다.',
-      aiLogRefresh:'AI 로그를 즉시 새로고침합니다.',
-      aiLogNew:'현재 로그를 백업(.bak)하고 새 로그 파일을 시작합니다.',
-      aiLogDownload:'현재 AI 로그 파일을 다운로드합니다.',
-      aiLogLines:'로그 조회 시 가져올 줄 수를 선택합니다.',
-      symbol:'차트 조회 심볼을 선택합니다.',
-      refreshBtn:'선택 심볼의 차트 데이터를 갱신합니다.',
-      configBtn:'웹 UI 설정 패널을 열거나 닫습니다.',
-      cfgSymbols:'웹 UI에서 사용할 심볼 목록(csv)을 입력합니다.',
-      cfgTf:'기본 타임프레임 값을 설정합니다.',
-      cfgLimit:'차트 히스토리 조회 개수를 설정합니다.',
-      cfgCron:'백그라운드 갱신 주기(cron)를 설정합니다.',
-      cfgLoad:'서버 설정 파일을 불러옵니다.',
-      cfgSave:'현재 웹 UI 설정을 저장합니다.',
-      aiCfgRaw:'legacy main.py용 config.yaml 내용을 편집합니다.',
-      aiCfgReload:'config.yaml 내용을 다시 불러옵니다.',
-      aiCfgSave:'편집한 config.yaml을 저장합니다(민감정보 분리).',
-      secApiKey:'Binance API Key를 입력합니다.',
-      secApiSecret:'Binance API Secret을 입력합니다.',
-      secTgToken:'텔레그램 봇 토큰을 입력합니다.',
-      secTgChat:'텔레그램 채팅 ID를 입력합니다.',
-      secSave:'입력한 시크릿 정보를 암호화 저장합니다.',
-      btMode:'백테스트 엔진 실행 모드를 선택합니다.',
-      btSymbol:'백테스트 심볼을 선택합니다.',
-      btTf:'백테스트 타임프레임을 입력합니다.',
-      btFast:'빠른 이동평균 기간을 설정합니다.',
-      btSlow:'느린 이동평균 기간을 설정합니다.',
-      btUnifiedRun:'통합 백테스트를 실행합니다.',
-      lSymbols:'legacy 백테스터 대상 심볼 목록입니다.',
-      lTf:'legacy 백테스터 타임프레임입니다.',
-      lLimit:'legacy 백테스터 데이터 개수 제한입니다.',
-      lWin:'legacy 전략 윈도우 파라미터입니다.',
-      lThr:'legacy 전략 임계값 파라미터입니다.',
-      lStrategy:'legacy 백테스터 전략 이름입니다.',
-      legacyRun:'legacy backtester.py를 실행합니다.'
+      aiStart:'Start the AI auto-trading bot.',
+      aiStop:'Stop the currently running AI auto-trading bot.',
+      aiLogRefresh:'Refresh AI logs immediately.',
+      aiLogNew:'Back up current log (.bak) and start a new log file.',
+      aiLogDownload:'Download the current AI log file.',
+      aiLogLines:'Select how many log lines to fetch.',
+      symbol:'Select the symbol for chart view.',
+      refreshBtn:'Refresh chart data for the selected symbol.',
+      configBtn:'Open or close the Web UI config panel.',
+      cfgSymbols:'Enter symbol list (csv) for the Web UI.',
+      cfgTf:'Set the default timeframe.',
+      cfgLimit:'Set chart history limit.',
+      cfgCron:'Set background refresh schedule (cron).',
+      cfgLoad:'Load server config file.',
+      cfgSave:'Save current Web UI config.',
+      aiCfgRaw:'Edit config.yaml for legacy main.py.',
+      aiCfgReload:'Reload config.yaml content.',
+      aiCfgSave:'Save edited config.yaml (with secret separation).',
+      secApiKey:'Enter Binance API Key.',
+      secApiSecret:'Enter Binance API Secret.',
+      secTgToken:'Enter Telegram bot token.',
+      secTgChat:'Enter Telegram chat ID.',
+      secSave:'Encrypt and save provided secrets.',
+      btMode:'Choose backtest engine mode.',
+      btSymbol:'Choose backtest symbol.',
+      btTf:'Enter backtest timeframe.',
+      btFast:'Set fast moving-average period.',
+      btSlow:'Set slow moving-average period.',
+      btUnifiedRun:'Run unified backtest.',
+      lSymbols:'Target symbol list for legacy backtester.',
+      lTf:'Timeframe for legacy backtester.',
+      lLimit:'Data size limit for legacy backtester.',
+      lWin:'Window parameter for legacy strategy.',
+      lThr:'Threshold parameter for legacy strategy.',
+      lStrategy:'Strategy name for legacy backtester.',
+      legacyRun:'Run legacy backtester.py.'
     };
 
     const labelFor=(el)=>{
-      if(!el) return '요소';
+      if(!el) return 'element';
       if(el.dataset?.help) return el.dataset.help;
       if(el.id && helpById[el.id]) return helpById[el.id];
-      if(el.classList?.contains('tab-btn')) return `탭 전환: ${el.textContent.trim()} 화면으로 이동합니다.`;
-      if(el.matches('th.sortable')) return `${el.textContent.trim()} 기준으로 비교 테이블을 정렬합니다.`;
-      return `${el.tagName.toLowerCase()} 요소: ${el.textContent?.trim() || el.placeholder || el.name || '입력/실행'} 관련 동작입니다.`;
+      if(el.classList?.contains('tab-btn')) return `Tab switch: move to ${el.textContent.trim()} screen.`;
+      if(el.matches('th.sortable')) return `Sort comparison table by ${el.textContent.trim()}.`;
+      return `${el.tagName.toLowerCase()} element: ${el.textContent?.trim() || el.placeholder || el.name || 'input/action'} related behavior.`;
     };
 
     const setActive=(el)=>{
@@ -323,58 +425,181 @@
     return arr;
   }
 
+  function nullifyNaNs(arr){
+    return (arr||[]).map(v=>Number.isFinite(Number(v))? Number(v): null);
+  }
+
+  function setBtnActive(id, on){
+    const el=document.getElementById(id);
+    if(!el) return;
+    el.classList.toggle('active', !!on);
+  }
+
+  function safeDestroyChart(inst){
+    if(!inst) return;
+    try{ inst.destroy(); }catch(err){ console.warn('Chart destroy failed (ignored):', err); }
+  }
+
+  function zoomOptions(){
+    if(STABLE_CHART_MODE) return {};
+    return {
+      zoom:{
+        pan:{enabled:true,modifierKey:'shift',mode:'x'},
+        zoom:{wheel:{enabled:true},pinch:{enabled:true},mode:'x'}
+      }
+    };
+  }
+
+  const crosshairPlugin={
+    id:'btbCrosshair',
+    afterDraw(chart,args,pluginOptions){
+      const active=chart.tooltip?.getActiveElements?.()||[];
+      if(!active.length) return;
+      const el=active[0]?.element;
+      const x=el?.x;
+      if(typeof x!=='number' || !Number.isFinite(x)) return;
+      const area=chart?.chartArea;
+      if(!area) return;
+      const {ctx}=chart;
+      const {top,bottom}=area;
+      ctx.save();
+      ctx.beginPath();
+      ctx.moveTo(x,top);
+      ctx.lineTo(x,bottom);
+      ctx.lineWidth=1;
+      ctx.strokeStyle='#64748b';
+      ctx.setLineDash([4,4]);
+      ctx.stroke();
+      ctx.restore();
+    }
+  };
+
   async function loadChart(symbol){
-    const r=await fetch(`/api/charts?symbol=${encodeURIComponent(symbol)}`);
+    const seq = ++priceChartLoadSeq;
+    const r=await fetch(`/api/charts?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(activeTimeframe)}`);
     const j=await r.json();
+    if(seq !== priceChartLoadSeq) return; // stale response from an older request
     const ctx=document.getElementById('priceChart');
     const labels=j.labels||[];
     const closes=j.values||[];
+    const highs=j.highs||[];
+    const lows=j.lows||[];
+    const volumes=j.volumes||[];
+    const indicators=j.indicators||{};
     const markers=j.markers||[];
     const markerByIndex=new Map((markers||[]).map(m=>[Number(m.index),m]));
+
+    if(!labels.length || !closes.length){
+      const existing = Chart.getChart(ctx);
+      safeDestroyChart(existing);
+      safeDestroyChart(chart);
+      chart = null;
+      document.getElementById('priceMarkerStatus').textContent = 'No chart data yet. Click Refresh Charts.';
+      const hover=document.getElementById('priceHoverInfo');
+      if(hover) hover.textContent='No chart data available for current symbol/timeframe.';
+      return;
+    }
 
     const buySeries=markerSeries(labels, markers, 'buy');
     const sellSeries=markerSeries(labels, markers, 'sell');
 
-    if(chart) chart.destroy();
-    chart=new Chart(ctx,{
+    const datasets=[
+      {label:`${j.symbol} close`,data:closes,borderColor:'#2b6cb0',backgroundColor:'rgba(37,99,235,0.08)',fill:false,pointRadius:0,tension:0.08,yAxisID:'y'}
+    ];
+
+    if(chartUiState.showEma){
+      datasets.push({label:`EMA ${j.signal_params?.fast || 'fast'}`,data:nullifyNaNs(indicators.ema_fast),borderColor:'#f59e0b',pointRadius:0,tension:0.05,borderWidth:1.5,yAxisID:'y'});
+      datasets.push({label:`EMA ${j.signal_params?.slow || 'slow'}`,data:nullifyNaNs(indicators.ema_slow),borderColor:'#8b5cf6',pointRadius:0,tension:0.05,borderWidth:1.5,yAxisID:'y'});
+    }
+    if(chartUiState.showBb){
+      datasets.push({label:'BB Upper',data:nullifyNaNs(indicators.bb_upper),borderColor:'#94a3b8',pointRadius:0,borderDash:[5,4],borderWidth:1,yAxisID:'y'});
+      datasets.push({label:'BB Mid',data:nullifyNaNs(indicators.bb_mid),borderColor:'#64748b',pointRadius:0,borderWidth:1,yAxisID:'y'});
+      datasets.push({label:'BB Lower',data:nullifyNaNs(indicators.bb_lower),borderColor:'#94a3b8',pointRadius:0,borderDash:[5,4],borderWidth:1,yAxisID:'y'});
+    }
+    if(chartUiState.showMarkers){
+      datasets.push({label:'BUY',data:buySeries,showLine:false,pointRadius:6,pointHoverRadius:7,pointStyle:'triangle',backgroundColor:'#16a34a',borderColor:'#16a34a',yAxisID:'y'});
+      datasets.push({label:'SELL',data:sellSeries,showLine:false,pointRadius:6,pointHoverRadius:7,pointStyle:'rectRot',backgroundColor:'#dc2626',borderColor:'#dc2626',yAxisID:'y'});
+    }
+    if(chartUiState.showVolume){
+      datasets.push({type:'bar',label:'Volume',data:volumes,backgroundColor:'rgba(71,85,105,0.35)',borderWidth:0,yAxisID:'yVol',barPercentage:1,categoryPercentage:1});
+    }
+
+    const afterBodyCb=(items)=>{
+      if(!items?.length) return '';
+      const idx=items[0].dataIndex;
+      const m=markerByIndex.get(Number(idx));
+      const line=[`high: ${highs[idx] ?? '-'}`,`low: ${lows[idx] ?? '-'}`,`volume: ${volumes[idx] ?? '-'}`];
+      if(m) line.push(`signal: ${String(m.side||'').toUpperCase()} (${m.reason||'config crossover'})`);
+      const hover=document.getElementById('priceHoverInfo');
+      if(hover){
+        hover.textContent=`${labels[idx] || '-'} · close ${closes[idx] ?? '-'} · high ${highs[idx] ?? '-'} · low ${lows[idx] ?? '-'} · volume ${volumes[idx] ?? '-'}${m ? ` · signal ${String(m.side||'').toUpperCase()}` : ''}`;
+      }
+      return line;
+    };
+
+    const chartConfig={
       type:'line',
-      data:{
-        labels,
-        datasets:[
-          {label:`${j.symbol} close`,data:closes,borderColor:'#2b6cb0',pointRadius:0,tension:0.1},
-          {label:'BUY',data:buySeries,showLine:false,pointRadius:7,pointHoverRadius:8,pointStyle:'triangle',backgroundColor:'#16a34a',borderColor:'#16a34a',pointBackgroundColor:'#16a34a',pointBorderColor:'#065f46',pointBorderWidth:1.5},
-          {label:'SELL',data:sellSeries,showLine:false,pointRadius:7,pointHoverRadius:8,pointStyle:'rectRot',backgroundColor:'#dc2626',borderColor:'#dc2626',pointBackgroundColor:'#dc2626',pointBorderColor:'#7f1d1d',pointBorderWidth:1.5}
-        ]
-      },
+      data:{labels,datasets},
+      plugins: STABLE_CHART_MODE ? [] : [crosshairPlugin],
       options:{
+        maintainAspectRatio:true,
+        animation:false,
+        interaction: STABLE_CHART_MODE ? {mode:'nearest',intersect:false} : {mode:'index',intersect:false},
+        normalized:true,
+        scales:{
+          x:{ticks:{maxTicksLimit:12}},
+          y:{position:'left'},
+          yVol:{display:chartUiState.showVolume,position:'right',grid:{drawOnChartArea:false}}
+        },
         plugins:{
-          tooltip:{
-            callbacks:{
-              afterBody:(items)=>{
-                if(!items?.length) return '';
-                const idx=items[0].dataIndex;
-                const m=markerByIndex.get(Number(idx));
-                return m ? `signal: ${String(m.side||'').toUpperCase()} (${m.reason||'config crossover'})` : '';
-              }
-            }
-          }
+          legend:{display:true},
+          decimation:{enabled:false},
+          ...zoomOptions(),
+          tooltip:{callbacks:{afterBody:afterBodyCb}}
         }
       }
-    });
+    };
+
+    try{
+      const live = Chart.getChart(ctx) || chart;
+      if(live){
+        live.data = chartConfig.data;
+        live.options = chartConfig.options;
+        live.update('none');
+        chart = live;
+      } else {
+        chart=new Chart(ctx, chartConfig);
+      }
+    } catch(err){
+      console.warn('Price chart render/update failed with interactive plugins; retrying safe mode.', err);
+      const stale = Chart.getChart(ctx) || chart;
+      safeDestroyChart(stale);
+      const fallbackPlugins={...(chartConfig.options?.plugins||{})};
+      delete fallbackPlugins.zoom;
+      chart=new Chart(ctx,{
+        ...chartConfig,
+        plugins:[],
+        options:{
+          ...chartConfig.options,
+          interaction:{mode:'nearest',intersect:false},
+          plugins:fallbackPlugins,
+        }
+      });
+    }
 
     const p=j.signal_params||{};
     const note=(j.signal_note||'').trim();
     const status=document.getElementById('priceMarkerStatus');
     if(markers.length){
-      status.textContent=`Signals: BUY/SELL ${markers.length}건 · basis=${j.signal_basis||'config crossover'} · fast=${p.fast ?? '-'}, slow=${p.slow ?? '-'}${note ? ` · ${note}` : ''}`;
+      status.textContent=`Signals: BUY/SELL ${markers.length} events · tf=${j.timeframe||activeTimeframe} · basis=${j.signal_basis||'config crossover'} · fast=${p.fast ?? '-'}, slow=${p.slow ?? '-'}${note ? ` · ${note}` : ''}`;
     }else{
-      status.textContent=`Signals: (none) · basis=${j.signal_basis||'config crossover'} · fast=${p.fast ?? '-'}, slow=${p.slow ?? '-'}${note ? ` · ${note}` : ''}`;
+      status.textContent=`Signals: (none) · tf=${j.timeframe||activeTimeframe} · basis=${j.signal_basis||'config crossover'} · fast=${p.fast ?? '-'}, slow=${p.slow ?? '-'}${note ? ` · ${note}` : ''}`;
     }
   }
 
   async function refreshCharts(){
     const symbol=document.getElementById('symbol').value;
-    const r=await fetch(`/api/charts/refresh2?symbol=${encodeURIComponent(symbol)}`);
+    const r=await fetch(`/api/charts/refresh2?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(activeTimeframe)}`);
     const j=await r.json();
     if(!r.ok || (j && j.ok===false && !j.refreshed?.length)){
       throw new Error((j?.errors && Object.values(j.errors).join('; ')) || j?.error || 'Refresh failed');
@@ -520,12 +745,16 @@
     return {
       id:'markerOverlay',
       afterDatasetsDraw(chart){
-        const {ctx, scales:{x,y}}=chart;
         if(!markers || !markers.length) return;
+        const ctx = chart?.ctx;
+        const x = chart?.scales?.x;
+        const y = chart?.scales?.y;
+        if(!ctx || !x || !y) return;
         ctx.save();
         markers.forEach(m=>{
           const px=x.getPixelForValue(m.index);
           const py=y.getPixelForValue(m.price);
+          if(!Number.isFinite(px) || !Number.isFinite(py)) return;
           m._px = px; m._py = py;
           ctx.fillStyle = m.side==='BUY' ? '#16a34a' : '#dc2626';
           ctx.beginPath();
@@ -623,8 +852,40 @@
     let markers=(result?.trades||[]).map(t=>({index:t.index,ts:t.ts||labels[t.index],price:t.price,side:t.side,reason:t.reason||t.reason_code}));
     if(!markers.length) markers=buildMockMarkers(labels, values);
 
-    if(btChart) btChart.destroy();
-    btChart=new Chart(ctx,{type:'line',data:{labels,datasets:[{label:`${result?.engine||'backtest'} equity`,data:values,borderColor:'#2563eb',pointRadius:0,tension:0.1}]},plugins:[markerPlugin(markers)]});
+    const existing = Chart.getChart(ctx);
+    safeDestroyChart(existing);
+    safeDestroyChart(btChart);
+
+    const btConfig={
+      type:'line',
+      data:{labels,datasets:[{label:`${result?.engine||'backtest'} equity`,data:values,borderColor:'#2563eb',pointRadius:0,tension:0.1}]},
+      plugins: STABLE_CHART_MODE ? [markerPlugin(markers)] : [markerPlugin(markers),crosshairPlugin],
+      options:{
+        animation:false,
+        interaction: STABLE_CHART_MODE ? {mode:'nearest',intersect:false} : {mode:'index',intersect:false},
+        plugins:{
+          ...zoomOptions()
+        }
+      }
+    };
+
+    try{
+      btChart=new Chart(ctx, btConfig);
+    } catch(err){
+      console.warn('Backtest chart render failed with interactive plugins; retrying safe mode.', err);
+      const stale = Chart.getChart(ctx);
+      safeDestroyChart(stale);
+      btChart=new Chart(ctx,{
+        ...btConfig,
+        plugins:[],
+        options:{
+          ...btConfig.options,
+          interaction:{mode:'nearest',intersect:false},
+          plugins:{}
+        }
+      });
+    }
+
     bindMarkerTooltip(markers);
     document.getElementById('btMarkerStatus').textContent = `Markers: ${markers.length} (${markers.length? 'overlay active':'none'})`;
   }
@@ -636,13 +897,43 @@
       timeframe:document.getElementById('btTf').value,
       fast_window:parseInt(document.getElementById('btFast').value,10),
       slow_window:parseInt(document.getElementById('btSlow').value,10),
+      quick_timeout_sec:20,
+      legacy_timeout_sec:120,
     };
-    const r=await fetch('/api/backtest/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-    const j=await r.json();
+
+    const controller = new AbortController();
+    const abortId = setTimeout(()=>controller.abort(), 175000);
+    let j;
+    try {
+      const r=await fetch('/api/backtest/run',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify(payload),
+        signal: controller.signal,
+      });
+      const text = await r.text();
+      try {
+        j = text ? JSON.parse(text) : {ok:false, error:{code:'EMPTY_RESPONSE', message:'No response body'}};
+      } catch {
+        j = {ok:false, error:{code:'INVALID_JSON', message:text?.slice(0,500)||'Non-JSON response'}};
+      }
+      if(!r.ok && !j.error){
+        j = {ok:false, error:{code:'HTTP_ERROR', message:`HTTP ${r.status}`}, results:j?.results||[]};
+      }
+    } catch (e) {
+      if(e?.name==='AbortError'){
+        j = {ok:false, error:{code:'CLIENT_TIMEOUT', message:'Request timed out. Try quick mode or narrower legacy params.'}, results:[]};
+      } else {
+        throw e;
+      }
+    } finally {
+      clearTimeout(abortId);
+    }
+
     document.getElementById('btOut').textContent=JSON.stringify(j,null,2);
     btLastResults=j.results||[];
     renderCompare(btLastResults);
-    const chartSource=btLastResults.find(x=>x.engine==='quick') || btLastResults[0];
+    const chartSource=btLastResults.find(x=>x.engine==='quick' && x?.summary?.status==='ok') || btLastResults.find(x=>x.engine==='quick') || btLastResults[0];
     if(chartSource?.equity_curve?.labels?.length){
       renderUnifiedChart(chartSource);
     } else {
@@ -687,11 +978,32 @@
     };
   });
 
+  [['tf15m','15m'],['tf1h','1h'],['tf4h','4h'],['tf1d','1d']].forEach(([id,tf])=>{
+    document.getElementById(id).onclick=()=>withButtonProgress(id,'Loading...',async ()=>{
+      activeTimeframe=tf;
+      ['tf15m','tf1h','tf4h','tf1d'].forEach(x=>setBtnActive(x,x===id));
+      await refreshCharts();
+    });
+  });
+
+  document.getElementById('toggleMarkers').onclick=()=>{ chartUiState.showMarkers=!chartUiState.showMarkers; setBtnActive('toggleMarkers',chartUiState.showMarkers); loadChart(document.getElementById('symbol').value); };
+  document.getElementById('toggleEma').onclick=()=>{ chartUiState.showEma=!chartUiState.showEma; setBtnActive('toggleEma',chartUiState.showEma); loadChart(document.getElementById('symbol').value); };
+  document.getElementById('toggleBb').onclick=()=>{ chartUiState.showBb=!chartUiState.showBb; setBtnActive('toggleBb',chartUiState.showBb); loadChart(document.getElementById('symbol').value); };
+  document.getElementById('toggleVolume').onclick=()=>{ chartUiState.showVolume=!chartUiState.showVolume; setBtnActive('toggleVolume',chartUiState.showVolume); loadChart(document.getElementById('symbol').value); };
+  document.getElementById('resetZoom').onclick=()=>{ chart?.resetZoom?.(); btChart?.resetZoom?.(); };
+  document.getElementById('downloadChart').onclick=()=>{
+    if(!chart) return;
+    const a=document.createElement('a');
+    a.href=chart.toBase64Image();
+    a.download=`btb-${document.getElementById('symbol').value.replace('/','_')}-${activeTimeframe}.png`;
+    a.click();
+  };
+
   document.getElementById('refreshBtn').onclick=()=>withButtonProgress('refreshBtn','Refreshing...',refreshCharts);
   document.getElementById('configBtn').onclick=()=>{const p=document.getElementById('configPanel');p.style.display=p.style.display==='none'?'block':'none';};
   document.getElementById('cfgLoad').onclick=()=>withButtonProgress('cfgLoad','Loading...',loadConfig);
   document.getElementById('cfgSave').onclick=()=>withButtonProgress('cfgSave','Saving...',saveConfig);
-  document.getElementById('btUnifiedRun').onclick=()=>withButtonProgress('btUnifiedRun','Running...',runBacktest);
+  document.getElementById('btUnifiedRun').onclick=()=>withButtonProgress('btUnifiedRun','Running...',runBacktest,{timeoutMs:180000});
   document.getElementById('legacyRun').onclick=()=>withButtonProgress('legacyRun','Processing...',runLegacyBacktester);
   document.getElementById('aiStart').onclick=()=>withButtonProgress('aiStart','Starting...',aiStart,{restoreDisabled:false});
   document.getElementById('aiStop').onclick=()=>withButtonProgress('aiStop','Stopping...',aiStop,{restoreDisabled:false});
@@ -704,7 +1016,11 @@
   document.getElementById('secSave').onclick=()=>withButtonProgress('secSave','Saving...',saveSecrets);
 
   setupInteractiveUi();
+  ['tf15m','tf1h','tf4h','tf1d'].forEach(id=>setBtnActive(id,false));
+  const tfMap={'15m':'tf15m','1h':'tf1h','4h':'tf4h','1d':'tf1d'};
+  setBtnActive(tfMap[activeTimeframe] || 'tf1h', true);
   setupSymbols();
+  setupChartFullscreen();
   loadChart('{{ default_symbol }}');
   updateAiStatus();
   refreshAiLogs();

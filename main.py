@@ -12,6 +12,7 @@ import ccxt
 from ta.volatility import AverageTrueRange, BollingerBands
 from ta.trend import EMAIndicator, ADXIndicator
 from ta.momentum import RSIIndicator
+from telegram_shared import build_summary_text, HELP_TEXT
 from credentials import load_or_prompt_credentials
 
 # Optional Telegram
@@ -145,13 +146,13 @@ def connect_exchange(cfg):
         "enableRateLimit": True,
         "options": {
             "defaultType": "spot",
-            "adjustForTimeDifference": True,  # Binance 서버 시간에 맞춰 자동 보정
+            "adjustForTimeDifference": True,  # auto-sync with Binance server time
         },
     })
 
-    # 추가: 시작 시 시간차를 여러 번 잡아 안정화
+    # Extra startup stabilization: re-check server time delta several times
     for _ in range(3):
-        # 서버와 시간 차이 미리 계산 (Optional but recommended)
+        # Pre-calculate server time difference (optional but recommended)
         try:
             exchange.load_time_difference()
             break
@@ -167,12 +168,12 @@ def safe_fetch_balance(exchange, retries=5, backoff_sec=1.0, logger=None):
         try:
             return exchange.fetch_balance()
         except ccxt.InvalidNonce:
-            # Binance -1021 대응
+            # Handle Binance -1021 time-sync nonce errors
             try:
                 exchange.load_time_difference()
             except Exception:
                 pass
-            time.sleep(1 + i)   # 점진적 backoff
+            time.sleep(1 + i)   # progressive backoff
         except (ccxt.NetworkError, ccxt.ExchangeNotAvailable, ccxt.RequestTimeout) as e:
             NETWORK_HEALTH["consecutive_failures"] = int(NETWORK_HEALTH.get("consecutive_failures", 0)) + 1
             NETWORK_HEALTH["last_error"] = str(e)
@@ -186,7 +187,7 @@ def safe_fetch_balance(exchange, retries=5, backoff_sec=1.0, logger=None):
             if logger:
                 logger.error("fetch_balance failed after %d retries: %s", retries, str(e))
             raise
-    # 끝까지 실패하면 마지막 예외 다시 raise
+    # If all retries fail, raise the last exception
     return exchange.fetch_balance()
 
 
@@ -223,7 +224,7 @@ def call_with_retry(fn, *, retries=3, backoff_sec=1.0, logger=None, label="netwo
             NETWORK_HEALTH["last_label"] = label
             if attempt < retries:
                 if logger:
-                    logger.warning("%s transient failure (%d/%d): %s", label, attempt, retries, str(e))
+                    logger.debug("%s transient failure (%d/%d): %s", label, attempt, retries, str(e))
                 # incremental backoff
                 time.sleep(backoff_sec * attempt)
                 continue
@@ -235,6 +236,10 @@ def call_with_retry(fn, *, retries=3, backoff_sec=1.0, logger=None, label="netwo
 
 def safe_fetch_tickers(exchange, symbols, cfg, logger=None):
     retries, backoff = _network_cfg(cfg)
+    symbols = list(symbols or [])
+    if len(symbols) == 1:
+        s = symbols[0]
+        return {s: safe_fetch_ticker(exchange, s, cfg, logger=logger)}
     return call_with_retry(
         lambda: exchange.fetch_tickers(symbols),
         retries=retries,
@@ -246,13 +251,31 @@ def safe_fetch_tickers(exchange, symbols, cfg, logger=None):
 
 def safe_fetch_ticker(exchange, symbol, cfg, logger=None):
     retries, backoff = _network_cfg(cfg)
-    return call_with_retry(
-        lambda: exchange.fetch_ticker(symbol),
-        retries=retries,
-        backoff_sec=backoff,
-        logger=logger,
-        label=f"fetch_ticker[{symbol}]",
-    )
+    try:
+        return call_with_retry(
+            lambda: exchange.fetch_ticker(symbol),
+            retries=retries,
+            backoff_sec=backoff,
+            logger=logger,
+            label=f"fetch_ticker[{symbol}]",
+        )
+    except Exception as e:
+        # Fallback path: some environments intermittently fail on ticker/24hr endpoint.
+        # Try latest OHLCV close so the loop can continue.
+        if logger:
+            logger.warning("fetch_ticker fallback to ohlcv for %s after error: %s", symbol, str(e))
+        tf = ((cfg or {}).get("general", {}) or {}).get("timeframe_signal", "1h")
+        rows = call_with_retry(
+            lambda: exchange.fetch_ohlcv(symbol, timeframe=tf, limit=2),
+            retries=retries,
+            backoff_sec=backoff,
+            logger=logger,
+            label=f"fetch_ohlcv_fallback[{symbol},{tf}]",
+        )
+        if not rows:
+            raise
+        last_close = float(rows[-1][4])
+        return {"symbol": symbol, "last": last_close}
 
 def connect_telegram(cfg):
     alerts = cfg.get("alerts", {})
@@ -382,6 +405,17 @@ def _risk_text(cfg):
     )
 
 
+def _summary_text(cfg, state, equity_now, base_ccy, now_ts=None):
+    return build_summary_text(
+        cfg,
+        state,
+        equity_now=equity_now,
+        base_ccy=base_ccy,
+        now_ts=(now_ts or now_tz(cfg.get("logging", {}).get("tz", "UTC"))),
+        running=True,
+    )
+
+
 def _telegram_owner_id(cfg):
     return str((cfg.get("alerts", {}) or {}).get("telegram_owner_user_id", "")).strip()
 
@@ -461,19 +495,7 @@ def poll_telegram_commands(tg, offset, cfg, state, equity_now, base_ccy, state_p
         elif cmd in ("/risk", "risk"):
             send_telegram(tg, _risk_text(cfg))
         elif cmd in ("/summary", "summary"):
-            positions = state.get("positions", {}) if isinstance(state, dict) else {}
-            runtime_mode = state.get("runtime_mode", "aggressive" if cfg.get("general", {}).get("aggressive_mode") else "normal")
-            approval = bool(cfg.get("alerts", {}).get("enable_trade_approval", False))
-            send_telegram(tg, (
-                "📌 Summary\n"
-                f"runtime_mode: {runtime_mode}\n"
-                f"approval: {'ON' if approval else 'OFF'}\n"
-                f"risk_pct: {cfg.get('risk', {}).get('per_trade_risk_pct')}\n"
-                f"max_pos: {cfg.get('risk', {}).get('max_concurrent_positions')}\n"
-                f"cooldown_h: {cfg.get('risk', {}).get('cooldown_hours')}\n"
-                f"open_positions: {len(positions)}\n"
-                f"equity: {float(equity_now):.2f} {base_ccy}"
-            ))
+            send_telegram(tg, _summary_text(cfg, state, equity_now, base_ccy))
         elif cmd in ("/health", "health"):
             owner = _telegram_owner_id(cfg)
             health_text = (
@@ -738,7 +760,7 @@ def poll_telegram_commands(tg, offset, cfg, state, equity_now, base_ccy, state_p
                 write_state(state_path, state)
             send_telegram(tg, "▶️ Bot resumed.")
         elif cmd in ("/help", "help"):
-            send_telegram(tg, "Available commands: /status, /positions, /risk, /summary, /health, /setrisk, /setmaxpos, /setcooldown, /mode, /restart, /confirm <token>, /cancel, /pause, /resume, /start, /stop, /help (owner-only for state-changing commands)")
+            send_telegram(tg, HELP_TEXT)
 
     return offset
 
@@ -1122,6 +1144,7 @@ def main():
     session_date = daily_key(now_tz(tzname))
     base_ccy = cfg["general"]["base_currency"]
     equity_start = fetch_equity_usdt(exchange, base_ccy)
+    state["session"] = {"date": session_date, "equity_start": float(equity_start)}
     logger.info("Bot started. dry_run=%s", cfg["general"]["dry_run"])
     if tg:
         logger.info("Telegram alerts enabled.")
@@ -1144,6 +1167,7 @@ def main():
             if dk != session_date:
                 session_date = dk
                 equity_start = fetch_equity_usdt(exchange, cfg["general"]["base_currency"])
+                state["session"] = {"date": session_date, "equity_start": float(equity_start)}
                 logger.info("New session %s. Equity start %.2f %s", session_date, equity_start, base_ccy)
                 if tg:
                     send_telegram(tg, f"📅 New session {session_date}. Equity start: {equity_start:.2f}")
@@ -1335,6 +1359,7 @@ def main():
             # equity snapshot
             equity_now = fetch_equity_usdt(exchange, base_ccy, balances_total, tickers)
             _update_network_health_state(state)
+            state.setdefault("runtime_health", {})["last_loop_at"] = loop_ts.isoformat()
             write_state(state_path, state)
             log_csv(csv_dir, "equity", {"ts": loop_ts.isoformat(), "equity": equity_now}, fieldnames=EQUITY_FIELDS)
             sleep_sec = int(cfg["strategy"].get("loop_sleep_seconds", 60) or 60)

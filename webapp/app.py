@@ -12,6 +12,7 @@ import time
 import base64
 import threading
 import datetime as dt
+import secrets
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from pathlib import Path
 from typing import Dict
@@ -30,6 +31,7 @@ from .storage import Storage
 from .chart_service import ChartService
 from .backtest_service import BacktestService
 from credentials import load_credentials, save_credentials
+from telegram_shared import build_summary_text, HELP_TEXT
 
 # Reuse legacy backtester web helpers to stay compatible with existing CLI options.
 from web_backtester_ui import DEFAULTS as LEGACY_BT_DEFAULTS, build_command as legacy_build_command, validate_values as legacy_validate_values, list_plot_files
@@ -386,7 +388,12 @@ def _append_inbox(chat_id: str, text: str) -> None:
 
 
 def _poll_server_telegram_commands() -> None:
-    # Unified Telegram command handler at web server level.
+    # Web server is the single Telegram poll owner by default.
+    cfg = _load_main_cfg()
+    poll_owner = str((cfg.get("alerts") or {}).get("telegram_polling_owner", "webapp") or "webapp").strip().lower()
+    if poll_owner not in ("webapp", "server"):
+        return
+
     d = _load_secrets()
     token = str(d.get("telegram_bot_token", "") or "").strip()
     chat_id = str(d.get("telegram_chat_id", "") or "").strip()
@@ -407,17 +414,29 @@ def _poll_server_telegram_commands() -> None:
         c = str((msg.get("chat") or {}).get("id", "")).strip()
         if c != chat_id:
             continue
-        text = str(msg.get("text") or "").strip().lower()
+
+        raw_text = str(msg.get("text") or "").strip()
+        text = raw_text.lower()
         if not text.startswith("/"):
             continue
 
-        cfg = _load_main_cfg()
         state = _load_main_state(cfg)
         owner_user_id = str((cfg.get("alerts") or {}).get("telegram_owner_user_id", "") or "").strip()
         msg_user_id = str((msg.get("from") or {}).get("id", "") or "").strip()
         owner_ok = bool(owner_user_id) and (msg_user_id == owner_user_id)
         parts = text.split()
         cmd = parts[0].lower() if parts else ""
+
+        if cmd in ("/approve", "/deny"):
+            _append_inbox(chat_id, text)
+            continue
+
+        owner_only_cmds = {
+            "/start", "/stop", "/restart", "/setrisk", "/setmaxpos", "/confirm", "/cancel", "/pause", "/resume"
+        }
+        if cmd in owner_only_cmds and not owner_ok:
+            _notify_telegram("Owner-only command.")
+            continue
 
         if cmd == "/start":
             result = _set_ai_running(True, "Telegram command")
@@ -431,6 +450,8 @@ def _poll_server_telegram_commands() -> None:
             _notify_telegram(_server_status_text())
         elif cmd == "/summary":
             _notify_telegram(_server_summary_text())
+        elif cmd == "/help":
+            _notify_telegram(HELP_TEXT)
         elif cmd == "/health":
             _notify_telegram(_server_health_text())
         elif cmd == "/positions":
@@ -451,49 +472,48 @@ def _poll_server_telegram_commands() -> None:
                 f"max_concurrent_positions: {risk.get('max_concurrent_positions')}\n"
                 f"cooldown_hours: {risk.get('cooldown_hours')}"
             )
-        elif cmd == "/restart":
-            if not owner_ok:
-                _notify_telegram("Owner-only command.")
-                continue
-            token_c = f"r{int(time.time()) % 100000:05d}"
-            state["pending_change"] = {
-                "cmd": "restart",
-                "value": "now",
+        elif cmd in ("/restart", "/setrisk", "/setmaxpos"):
+            token_c = secrets.token_hex(3)
+            pending = {
+                "cmd": cmd.lstrip("/"),
                 "token": token_c,
                 "requested_at": time.time(),
                 "expires_at": int(time.time()) + 120,
                 "user_id": msg_user_id,
             }
-            _write_main_state(cfg, state)
-            _notify_telegram(f"Pending change: restart -> now\nReply /confirm {token_c} to apply (expires in 120s) or /cancel")
-        elif cmd == "/setrisk":
-            if len(parts) < 2:
-                _notify_telegram("Usage: /setrisk <percent>")
-            else:
+            if cmd == "/restart":
+                pending["value"] = "now"
+            elif cmd == "/setrisk":
+                if len(parts) < 2:
+                    _notify_telegram("Usage: /setrisk <percent>")
+                    continue
                 try:
                     v = float(parts[1])
                     if v < 0.05 or v > 5.0:
                         raise ValueError("range")
-                    pending = {"cmd": "setrisk", "value": v, "requested_at": time.time()}
-                    state["pending_change"] = pending
-                    _write_main_state(cfg, state)
-                    _notify_telegram(f"Pending change: setrisk -> {v}\nReply /confirm to apply or /cancel to discard.")
                 except Exception:
                     _notify_telegram("Invalid risk. Allowed range: 0.05 ~ 5.0")
-        elif cmd == "/setmaxpos":
-            if len(parts) < 2:
-                _notify_telegram("Usage: /setmaxpos <n>")
+                    continue
+                pending["value"] = v
             else:
+                if len(parts) < 2:
+                    _notify_telegram("Usage: /setmaxpos <n>")
+                    continue
                 try:
                     v = int(parts[1])
                     if v < 1 or v > 20:
                         raise ValueError("range")
-                    pending = {"cmd": "setmaxpos", "value": v, "requested_at": time.time()}
-                    state["pending_change"] = pending
-                    _write_main_state(cfg, state)
-                    _notify_telegram(f"Pending change: setmaxpos -> {v}\nReply /confirm to apply or /cancel to discard.")
                 except Exception:
                     _notify_telegram("Invalid max positions. Allowed range: 1 ~ 20")
+                    continue
+                pending["value"] = v
+
+            state["pending_change"] = pending
+            _write_main_state(cfg, state)
+            _notify_telegram(
+                f"Pending change: {pending['cmd']} -> {pending['value']}\n"
+                f"Reply /confirm {token_c} to apply (expires in 120s) or /cancel"
+            )
         elif cmd == "/confirm":
             pending = state.get("pending_change") or {}
             pcmd = pending.get("cmd")
@@ -501,17 +521,20 @@ def _poll_server_telegram_commands() -> None:
             token_in = parts[1].strip().lower() if len(parts) >= 2 else ""
             if not pcmd:
                 _notify_telegram("No pending change.")
-            elif int(time.time()) > int(pending.get("expires_at", 2**31)):
+                continue
+            if not token_in:
+                _notify_telegram("Usage: /confirm <token>")
+                continue
+            if token_in != str(pending.get("token", "")).lower() or msg_user_id != str(pending.get("user_id", "")):
+                _notify_telegram("Invalid confirm token.")
+                continue
+            if int(time.time()) > int(pending.get("expires_at", 0)):
                 state.pop("pending_change", None)
                 _write_main_state(cfg, state)
                 _notify_telegram("Pending change expired. Please request again.")
-            elif pcmd == "restart":
-                if not owner_ok:
-                    _notify_telegram("Owner-only command.")
-                    continue
-                if not token_in or token_in != str(pending.get("token", "")).lower() or msg_user_id != str(pending.get("user_id", "")):
-                    _notify_telegram("Invalid confirm token.")
-                    continue
+                continue
+
+            if pcmd == "restart":
                 state.pop("pending_change", None)
                 _write_main_state(cfg, state)
                 _notify_telegram("♻️ Restarting AI bot now...")
@@ -535,6 +558,10 @@ def _poll_server_telegram_commands() -> None:
                 _write_main_state(cfg, state)
                 _notify_telegram(f"✅ max_concurrent_positions updated: {old} -> {pval}")
         elif cmd == "/cancel":
+            pending = state.get("pending_change") or {}
+            if pending and msg_user_id != str(pending.get("user_id", "")):
+                _notify_telegram("Only the requester can cancel this pending change.")
+                continue
             state.pop("pending_change", None)
             _write_main_state(cfg, state)
             _notify_telegram("Cancelled pending change.")
@@ -546,10 +573,6 @@ def _poll_server_telegram_commands() -> None:
             state["bot_paused"] = False
             _write_main_state(cfg, state)
             _notify_telegram("▶️ Bot resumed.")
-        elif cmd == "/help":
-            _notify_telegram("Available commands: /status, /summary, /health, /positions, /risk, /setrisk, /setmaxpos, /restart, /confirm, /cancel, /pause, /resume, /start, /stop, /help")
-        elif text.startswith("approve ") or text.startswith("deny ") or text.startswith("/approve ") or text.startswith("/deny "):
-            _append_inbox(chat_id, text)
 
     if new_offset is not None:
         _save_offset(new_offset)
@@ -667,18 +690,45 @@ def _server_status_text() -> str:
 def _server_summary_text() -> str:
     cfg = _load_main_cfg()
     state = _load_main_state(cfg)
-    risk = cfg.get("risk") or {}
-    positions = state.get("positions") or {}
-    runtime_mode = state.get("runtime_mode", "aggressive" if (cfg.get("general") or {}).get("aggressive_mode") else "normal")
-    approval = bool((cfg.get("alerts") or {}).get("enable_trade_approval", False))
-    return (
-        "📌 Summary\n"
-        f"runtime_mode: {runtime_mode}\n"
-        f"approval: {'ON' if approval else 'OFF'}\n"
-        f"risk_pct: {risk.get('per_trade_risk_pct')}\n"
-        f"max_pos: {risk.get('max_concurrent_positions')}\n"
-        f"cooldown_h: {risk.get('cooldown_hours')}\n"
-        f"open_positions: {len(positions)}"
+    base = (cfg.get("general") or {}).get("base_currency") or "USDT"
+
+    equity_now = None
+    try:
+        csv_dir = Path((cfg.get("logging") or {}).get("csv_dir") or "./logs")
+        eq_file = csv_dir / "equity.csv"
+        if eq_file.exists():
+            rows = [ln for ln in eq_file.read_text(errors="ignore").splitlines() if ln.strip()]
+            if len(rows) >= 2:
+                last = rows[-1].split(",")
+                if len(last) >= 2:
+                    equity_now = float(last[1])
+    except Exception:
+        equity_now = None
+
+    if equity_now is None:
+        session = state.get("session") if isinstance(state.get("session"), dict) else {}
+        equity_now = float(session.get("equity_start") or 0.0)
+
+    # Enrich open-position summary with latest known price from chart DB.
+    try:
+        tf = str((cfg.get("general") or {}).get("timeframe_signal") or "1h")
+        positions = state.get("positions") if isinstance(state.get("positions"), dict) else {}
+        for sym, pos in positions.items():
+            if not isinstance(pos, dict):
+                continue
+            rows = storage.fetch_ohlcv(sym, tf, 1)
+            if rows:
+                pos["current_price"] = float(rows[-1][4])
+    except Exception:
+        pass
+
+    return build_summary_text(
+        cfg,
+        state,
+        equity_now=float(equity_now),
+        base_ccy=base,
+        now_ts=dt.datetime.now(dt.timezone.utc),
+        running=_is_ai_running(),
     )
 
 
@@ -722,20 +772,58 @@ def _error_response(code: str, message: str, status_code: int = 400):
     return JSONResponse(status_code=status_code, content={"ok": False, "error": {"code": code, "message": message}})
 
 
-def _run_legacy_backtest(values: Dict):
+def _run_legacy_backtest(values: Dict, timeout_sec: int = 120):
     cmd = legacy_build_command(values)
-    proc = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True)
-    raw_output = (proc.stdout or "")
-    if not raw_output.strip():
-        raw_output = proc.stderr or ""
-    output = _clean_console_output(raw_output)
-    plots = list_plot_files()
-    return {
-        "ok": proc.returncode == 0,
-        "returncode": proc.returncode,
-        "output": output,
-        "plots": plots,
-    }
+    timeout_sec = max(10, int(timeout_sec))
+    proc: subprocess.Popen | None = None
+
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(ROOT),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+        stdout, stderr = proc.communicate(timeout=timeout_sec)
+        raw_output = (stdout or "")
+        if not raw_output.strip():
+            raw_output = stderr or ""
+        output = _clean_console_output(raw_output)
+        plots = list_plot_files()
+        return {
+            "ok": proc.returncode == 0,
+            "returncode": int(proc.returncode or 0),
+            "output": output,
+            "plots": plots,
+        }
+    except subprocess.TimeoutExpired:
+        # Kill the full process group to avoid orphan subprocesses that keep CPU busy.
+        if proc is not None:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+            try:
+                stdout, stderr = proc.communicate(timeout=5)
+            except Exception:
+                stdout, stderr = "", ""
+        else:
+            stdout, stderr = "", ""
+
+        raw_output = ((stdout or "") + "\n" + (stderr or "")).strip()
+        output = _clean_console_output(raw_output) or f"Legacy backtest timed out after {timeout_sec}s"
+        return {
+            "ok": False,
+            "returncode": 124,
+            "output": output,
+            "plots": list_plot_files(),
+            "error": "timeout",
+        }
 
 
 @app.on_event("startup")
@@ -880,6 +968,31 @@ def _moving_average(values: list[float], window: int) -> list[float | None]:
     return out
 
 
+def _stddev_series(values: list[float], window: int) -> list[float | None]:
+    if window <= 1:
+        return [None] * len(values)
+    out: list[float | None] = [None] * len(values)
+    for i in range(window - 1, len(values)):
+        chunk = values[i - window + 1 : i + 1]
+        mean = sum(chunk) / float(window)
+        variance = sum((v - mean) ** 2 for v in chunk) / float(window)
+        out[i] = variance ** 0.5
+    return out
+
+
+def _bollinger_bands(values: list[float], window: int = 20, sigma: float = 2.0) -> tuple[list[float | None], list[float | None], list[float | None]]:
+    ma = _moving_average(values, window)
+    sd = _stddev_series(values, window)
+    upper: list[float | None] = [None] * len(values)
+    lower: list[float | None] = [None] * len(values)
+    for i in range(len(values)):
+        if ma[i] is None or sd[i] is None:
+            continue
+        upper[i] = float(ma[i]) + float(sigma) * float(sd[i])
+        lower[i] = float(ma[i]) - float(sigma) * float(sd[i])
+    return ma, upper, lower
+
+
 def _effective_main_config() -> dict:
     cfg = _load_main_cfg()
     if not isinstance(cfg, dict):
@@ -966,22 +1079,40 @@ def _build_price_signal_markers(labels: list[str], closes: list[float], fast: in
 
 
 @app.get("/api/charts")
-def get_chart(symbol: str):
+def get_chart(symbol: str, timeframe: str | None = None, limit: int | None = None):
     runtime = _chart_runtime_params()
     fast, slow = _signal_params_from_main_config()
 
-    display_limit = int(runtime["history_limit"])
-    calc_limit = max(display_limit + slow + 5, display_limit)
-    rows = storage.fetch_ohlcv(symbol, runtime["timeframe"], limit=calc_limit)
+    tf = (timeframe or runtime["timeframe"]).strip()
+    display_limit = max(100, int(limit or runtime["history_limit"]))
+    calc_limit = max(display_limit + max(slow, 20) + 25, display_limit)
+    rows = storage.fetch_ohlcv(symbol, tf, limit=calc_limit)
 
-    labels_all = [dt.datetime.utcfromtimestamp(int(ts) / 1000).strftime("%Y-%m-%d") for ts, *_ in rows]
+    labels_all = [dt.datetime.utcfromtimestamp(int(ts) / 1000).strftime("%Y-%m-%d %H:%M") for ts, *_ in rows]
     closes_all = [float(c) for _, _, _, _, c, _ in rows]
+    volumes_all = [float(v) for *_, v in rows]
+    highs_all = [float(h) for _, _, h, _, _, _ in rows]
+    lows_all = [float(l) for _, _, _, l, _, _ in rows]
+
+    ema_fast_all = _moving_average(closes_all, fast)
+    ema_slow_all = _moving_average(closes_all, slow)
+    bb_mid_all, bb_upper_all, bb_lower_all = _bollinger_bands(closes_all, window=20, sigma=2.0)
+
     markers_all = _build_price_signal_markers(labels_all, closes_all, fast=fast, slow=slow)
     insufficient_signal_data = len(closes_all) < (slow + 2)
 
     trim_start = max(0, len(labels_all) - display_limit)
     labels = labels_all[trim_start:]
     closes = closes_all[trim_start:]
+    volumes = volumes_all[trim_start:]
+    highs = highs_all[trim_start:]
+    lows = lows_all[trim_start:]
+
+    ema_fast = ema_fast_all[trim_start:]
+    ema_slow = ema_slow_all[trim_start:]
+    bb_mid = bb_mid_all[trim_start:]
+    bb_upper = bb_upper_all[trim_start:]
+    bb_lower = bb_lower_all[trim_start:]
 
     markers = []
     for m in markers_all:
@@ -994,9 +1125,21 @@ def get_chart(symbol: str):
 
     return {
         "symbol": symbol,
-        "timeframe": runtime["timeframe"],
+        "timeframe": tf,
         "labels": labels,
         "values": closes,
+        "highs": highs,
+        "lows": lows,
+        "volumes": volumes,
+        "indicators": {
+            "ema_fast": ema_fast,
+            "ema_slow": ema_slow,
+            "bb_mid": bb_mid,
+            "bb_upper": bb_upper,
+            "bb_lower": bb_lower,
+            "bb_window": 20,
+            "bb_sigma": 2.0,
+        },
         "signal_basis": f"config.yaml ({'aggressive' if bool((_load_main_cfg().get('general') or {}).get('aggressive_mode', False)) else 'normal'}) strategy.ema_fast/ema_slow crossover",
         "signal_params": {"fast": fast, "slow": slow},
         "signal_note": f"Need at least {slow + 2} candles for reliable EMA crossover (current={len(closes_all)})" if insufficient_signal_data else "",
@@ -1037,10 +1180,37 @@ def refresh_charts(req: RefreshRequest = Body(default=RefreshRequest())):
 
 
 @app.get("/api/charts/refresh2")
-def refresh_charts_v2(symbol: str | None = None):
-    cfg = config_mgr.load()
-    req = RefreshRequest(symbols=[symbol] if symbol else None)
-    return refresh_charts(req)
+def refresh_charts_v2(symbol: str | None = None, timeframe: str | None = None, limit: int | None = None):
+    runtime = _chart_runtime_params()
+    fast, slow = _signal_params_from_main_config()
+    tf = (timeframe or runtime["timeframe"]).strip()
+    base_limit = max(100, int(limit or runtime["history_limit"]))
+    refresh_limit = max(base_limit + slow + 5, base_limit)
+
+    targets = [symbol] if symbol else runtime["symbols"]
+    refreshed: list[str] = []
+    errors: dict[str, str] = {}
+
+    for sym in targets:
+        try:
+            with ThreadPoolExecutor(max_workers=1) as ex:
+                fut = ex.submit(chart_service.refresh_symbol, sym, tf, refresh_limit)
+                fut.result(timeout=20)
+            refreshed.append(sym)
+        except FuturesTimeoutError:
+            errors[sym] = "timeout while fetching OHLCV"
+        except Exception as e:
+            errors[sym] = str(e)
+
+    storage.set_meta("last_chart_refresh", dt.datetime.utcnow().isoformat(timespec="seconds"))
+    return {
+        "ok": len(errors) == 0,
+        "last_refresh": storage.get_meta("last_chart_refresh"),
+        "signal_params": {"fast": fast, "slow": slow},
+        "timeframe": tf,
+        "refreshed": refreshed,
+        "errors": errors,
+    }
 
 
 @app.post("/api/backtester/run")
@@ -1195,10 +1365,40 @@ def run_backtest_unified(payload: Dict = Body(...)):
         starting_capital = float((payload or {}).get("starting_capital", cfg.starting_capital))
         fee_rate = float((payload or {}).get("fee_rate", cfg.fee_rate))
 
+        quick_timeout_sec = max(3, min(int((payload or {}).get("quick_timeout_sec", 20) or 20), 120))
+        legacy_timeout_sec = max(10, min(int((payload or {}).get("legacy_timeout_sec", 120) or 120), 300))
+
         results = []
+
         if mode in ("quick", "both"):
-            quick_raw = backtest_service.run_sma_crossover(symbol, timeframe, fast, slow, starting_capital, fee_rate)
-            results.append(backtest_service.to_unified_quick(symbol, quick_raw))
+            ex = ThreadPoolExecutor(max_workers=1)
+            fut = ex.submit(backtest_service.run_sma_crossover, symbol, timeframe, fast, slow, starting_capital, fee_rate)
+            try:
+                quick_raw = fut.result(timeout=quick_timeout_sec)
+                results.append(backtest_service.to_unified_quick(symbol, quick_raw))
+            except FuturesTimeoutError:
+                fut.cancel()
+                results.append({
+                    "engine": "quick",
+                    "summary": {"symbol": symbol, "status": "error", "source": "quick", "note": f"quick timeout after {quick_timeout_sec}s"},
+                    "metrics": {},
+                    "trades": [],
+                    "equity_curve": {"labels": [], "values": []},
+                    "markers": [],
+                    "raw_output": "",
+                })
+            except ValueError as e:
+                results.append({
+                    "engine": "quick",
+                    "summary": {"symbol": symbol, "status": "error", "source": "quick", "note": str(e)},
+                    "metrics": {},
+                    "trades": [],
+                    "equity_curve": {"labels": [], "values": []},
+                    "markers": [],
+                    "raw_output": "",
+                })
+            finally:
+                ex.shutdown(wait=False, cancel_futures=True)
 
         if mode in ("legacy", "both"):
             values = dict(LEGACY_BT_DEFAULTS)
@@ -1211,11 +1411,20 @@ def run_backtest_unified(payload: Dict = Body(...)):
             errors = legacy_validate_values(values)
             if errors:
                 return _error_response("LEGACY_VALIDATION_ERROR", "; ".join(errors), 400)
-            legacy_raw = _run_legacy_backtest(values)
-            results.append(backtest_service.to_unified_legacy(symbol, legacy_raw.get("output", ""), legacy_raw.get("returncode", 1)))
 
+            legacy_raw = _run_legacy_backtest(values, timeout_sec=legacy_timeout_sec)
+            legacy_result = backtest_service.to_unified_legacy(symbol, legacy_raw.get("output", ""), legacy_raw.get("returncode", 1))
+            if not legacy_raw.get("ok", False):
+                legacy_result["summary"]["status"] = "error"
+                if legacy_raw.get("error") == "timeout":
+                    legacy_result["summary"]["note"] = f"legacy timeout after {legacy_timeout_sec}s"
+                elif legacy_raw.get("output"):
+                    legacy_result["summary"]["note"] = str(legacy_raw.get("output"))[:280]
+            results.append(legacy_result)
+
+        ok = all((r.get("summary", {}).get("status") == "ok") for r in results) if results else False
         return {
-            "ok": True,
+            "ok": ok,
             "mode": mode,
             "results": results,
         }
