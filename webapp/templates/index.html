@@ -461,6 +461,17 @@
     const markers=j.markers||[];
     const markerByIndex=new Map((markers||[]).map(m=>[Number(m.index),m]));
 
+    if(!labels.length || !closes.length){
+      const existing = Chart.getChart(ctx);
+      if(existing) existing.destroy();
+      if(chart) chart.destroy();
+      chart = null;
+      document.getElementById('priceMarkerStatus').textContent = 'No chart data yet. Click Refresh Charts.';
+      const hover=document.getElementById('priceHoverInfo');
+      if(hover) hover.textContent='No chart data available for current symbol/timeframe.';
+      return;
+    }
+
     const buySeries=markerSeries(labels, markers, 'buy');
     const sellSeries=markerSeries(labels, markers, 'sell');
 
@@ -505,7 +516,7 @@
         },
         plugins:{
           legend:{display:true},
-          decimation:{enabled:true,algorithm:'lttb',samples:350},
+          decimation:{enabled:false},
           zoom:{
             pan:{enabled:true,modifierKey:'shift',mode:'x'},
             zoom:{wheel:{enabled:true},pinch:{enabled:true},mode:'x'}
