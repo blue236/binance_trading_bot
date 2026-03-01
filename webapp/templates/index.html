@@ -227,7 +227,7 @@
     const overlay=document.getElementById('chartFsOverlay');
     overlay.classList.remove('show');
     overlay.setAttribute('aria-hidden','true');
-    if(fsChart){ fsChart.destroy(); fsChart=null; }
+    if(fsChart){ safeDestroyChart(fsChart); fsChart=null; }
   }
 
   function openFullscreenChart(kind){
@@ -246,7 +246,7 @@
     options.responsive = true;
     options.maintainAspectRatio = false;
 
-    if(fsChart){ fsChart.destroy(); }
+    if(fsChart){ safeDestroyChart(fsChart); }
     try{
       fsChart = new Chart(ctx, {
         type: source.config?.type || 'line',
@@ -434,6 +434,11 @@
     el.classList.toggle('active', !!on);
   }
 
+  function safeDestroyChart(inst){
+    if(!inst) return;
+    try{ inst.destroy(); }catch(err){ console.warn('Chart destroy failed (ignored):', err); }
+  }
+
   const crosshairPlugin={
     id:'btbCrosshair',
     afterDraw(chart,args,pluginOptions){
@@ -475,8 +480,8 @@
 
     if(!labels.length || !closes.length){
       const existing = Chart.getChart(ctx);
-      if(existing) existing.destroy();
-      if(chart) chart.destroy();
+      safeDestroyChart(existing);
+      safeDestroyChart(chart);
       chart = null;
       document.getElementById('priceMarkerStatus').textContent = 'No chart data yet. Click Refresh Charts.';
       const hover=document.getElementById('priceHoverInfo');
@@ -508,9 +513,18 @@
       datasets.push({type:'bar',label:'Volume',data:volumes,backgroundColor:'rgba(71,85,105,0.35)',borderWidth:0,yAxisID:'yVol',barPercentage:1,categoryPercentage:1});
     }
 
-    const existing = Chart.getChart(ctx);
-    if(existing) existing.destroy();
-    if(chart) chart.destroy();
+    const afterBodyCb=(items)=>{
+      if(!items?.length) return '';
+      const idx=items[0].dataIndex;
+      const m=markerByIndex.get(Number(idx));
+      const line=[`high: ${highs[idx] ?? '-'}`,`low: ${lows[idx] ?? '-'}`,`volume: ${volumes[idx] ?? '-'}`];
+      if(m) line.push(`signal: ${String(m.side||'').toUpperCase()} (${m.reason||'config crossover'})`);
+      const hover=document.getElementById('priceHoverInfo');
+      if(hover){
+        hover.textContent=`${labels[idx] || '-'} · close ${closes[idx] ?? '-'} · high ${highs[idx] ?? '-'} · low ${lows[idx] ?? '-'} · volume ${volumes[idx] ?? '-'}${m ? ` · signal ${String(m.side||'').toUpperCase()}` : ''}`;
+      }
+      return line;
+    };
 
     const chartConfig={
       type:'line',
@@ -534,32 +548,25 @@
             pan:{enabled:true,modifierKey:'shift',mode:'x'},
             zoom:{wheel:{enabled:true},pinch:{enabled:true},mode:'x'}
           },
-          tooltip:{
-            callbacks:{
-              afterBody:(items)=>{
-                if(!items?.length) return '';
-                const idx=items[0].dataIndex;
-                const m=markerByIndex.get(Number(idx));
-                const line=[`high: ${highs[idx] ?? '-'}`,`low: ${lows[idx] ?? '-'}`,`volume: ${volumes[idx] ?? '-'}`];
-                if(m) line.push(`signal: ${String(m.side||'').toUpperCase()} (${m.reason||'config crossover'})`);
-                const hover=document.getElementById('priceHoverInfo');
-                if(hover){
-                  hover.textContent=`${labels[idx] || '-'} · close ${closes[idx] ?? '-'} · high ${highs[idx] ?? '-'} · low ${lows[idx] ?? '-'} · volume ${volumes[idx] ?? '-'}${m ? ` · signal ${String(m.side||'').toUpperCase()}` : ''}`;
-                }
-                return line;
-              }
-            }
-          }
+          tooltip:{callbacks:{afterBody:afterBodyCb}}
         }
       }
     };
 
     try{
-      chart=new Chart(ctx, chartConfig);
+      const live = Chart.getChart(ctx) || chart;
+      if(live){
+        live.data = chartConfig.data;
+        live.options = chartConfig.options;
+        live.update('none');
+        chart = live;
+      } else {
+        chart=new Chart(ctx, chartConfig);
+      }
     } catch(err){
-      console.warn('Price chart render failed with interactive plugins; retrying safe mode.', err);
-      const stale = Chart.getChart(ctx);
-      if(stale) stale.destroy();
+      console.warn('Price chart render/update failed with interactive plugins; retrying safe mode.', err);
+      const stale = Chart.getChart(ctx) || chart;
+      safeDestroyChart(stale);
       const fallbackPlugins={...(chartConfig.options?.plugins||{})};
       delete fallbackPlugins.zoom;
       chart=new Chart(ctx,{
@@ -839,8 +846,8 @@
     if(!markers.length) markers=buildMockMarkers(labels, values);
 
     const existing = Chart.getChart(ctx);
-    if(existing) existing.destroy();
-    if(btChart) btChart.destroy();
+    safeDestroyChart(existing);
+    safeDestroyChart(btChart);
 
     const btConfig={
       type:'line',
@@ -860,7 +867,7 @@
     } catch(err){
       console.warn('Backtest chart render failed with interactive plugins; retrying safe mode.', err);
       const stale = Chart.getChart(ctx);
-      if(stale) stale.destroy();
+      safeDestroyChart(stale);
       btChart=new Chart(ctx,{
         ...btConfig,
         plugins:[],
