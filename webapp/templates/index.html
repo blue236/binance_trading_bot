@@ -427,8 +427,13 @@
     afterDraw(chart,args,pluginOptions){
       const active=chart.tooltip?.getActiveElements?.()||[];
       if(!active.length) return;
-      const {ctx, chartArea:{top,bottom}}=chart;
-      const x=active[0].element.x;
+      const el=active[0]?.element;
+      const x=el?.x;
+      if(typeof x!=='number' || !Number.isFinite(x)) return;
+      const area=chart?.chartArea;
+      if(!area) return;
+      const {ctx}=chart;
+      const {top,bottom}=area;
       ctx.save();
       ctx.beginPath();
       ctx.moveTo(x,top);
