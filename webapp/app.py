@@ -774,27 +774,48 @@ def _error_response(code: str, message: str, status_code: int = 400):
 
 def _run_legacy_backtest(values: Dict, timeout_sec: int = 120):
     cmd = legacy_build_command(values)
+    timeout_sec = max(10, int(timeout_sec))
+    proc: subprocess.Popen | None = None
+
     try:
-        proc = subprocess.run(
+        proc = subprocess.Popen(
             cmd,
             cwd=str(ROOT),
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=max(10, int(timeout_sec)),
+            start_new_session=True,
         )
-        raw_output = (proc.stdout or "")
+        stdout, stderr = proc.communicate(timeout=timeout_sec)
+        raw_output = (stdout or "")
         if not raw_output.strip():
-            raw_output = proc.stderr or ""
+            raw_output = stderr or ""
         output = _clean_console_output(raw_output)
         plots = list_plot_files()
         return {
             "ok": proc.returncode == 0,
-            "returncode": proc.returncode,
+            "returncode": int(proc.returncode or 0),
             "output": output,
             "plots": plots,
         }
-    except subprocess.TimeoutExpired as e:
-        raw_output = ((e.stdout or "") + "\n" + (e.stderr or "")).strip()
+    except subprocess.TimeoutExpired:
+        # Kill the full process group to avoid orphan subprocesses that keep CPU busy.
+        if proc is not None:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+            try:
+                stdout, stderr = proc.communicate(timeout=5)
+            except Exception:
+                stdout, stderr = "", ""
+        else:
+            stdout, stderr = "", ""
+
+        raw_output = ((stdout or "") + "\n" + (stderr or "")).strip()
         output = _clean_console_output(raw_output) or f"Legacy backtest timed out after {timeout_sec}s"
         return {
             "ok": False,
@@ -1262,10 +1283,40 @@ def run_backtest_unified(payload: Dict = Body(...)):
         starting_capital = float((payload or {}).get("starting_capital", cfg.starting_capital))
         fee_rate = float((payload or {}).get("fee_rate", cfg.fee_rate))
 
+        quick_timeout_sec = max(3, min(int((payload or {}).get("quick_timeout_sec", 20) or 20), 120))
+        legacy_timeout_sec = max(10, min(int((payload or {}).get("legacy_timeout_sec", 120) or 120), 300))
+
         results = []
+
         if mode in ("quick", "both"):
-            quick_raw = backtest_service.run_sma_crossover(symbol, timeframe, fast, slow, starting_capital, fee_rate)
-            results.append(backtest_service.to_unified_quick(symbol, quick_raw))
+            ex = ThreadPoolExecutor(max_workers=1)
+            fut = ex.submit(backtest_service.run_sma_crossover, symbol, timeframe, fast, slow, starting_capital, fee_rate)
+            try:
+                quick_raw = fut.result(timeout=quick_timeout_sec)
+                results.append(backtest_service.to_unified_quick(symbol, quick_raw))
+            except FuturesTimeoutError:
+                fut.cancel()
+                results.append({
+                    "engine": "quick",
+                    "summary": {"symbol": symbol, "status": "error", "source": "quick", "note": f"quick timeout after {quick_timeout_sec}s"},
+                    "metrics": {},
+                    "trades": [],
+                    "equity_curve": {"labels": [], "values": []},
+                    "markers": [],
+                    "raw_output": "",
+                })
+            except ValueError as e:
+                results.append({
+                    "engine": "quick",
+                    "summary": {"symbol": symbol, "status": "error", "source": "quick", "note": str(e)},
+                    "metrics": {},
+                    "trades": [],
+                    "equity_curve": {"labels": [], "values": []},
+                    "markers": [],
+                    "raw_output": "",
+                })
+            finally:
+                ex.shutdown(wait=False, cancel_futures=True)
 
         if mode in ("legacy", "both"):
             values = dict(LEGACY_BT_DEFAULTS)
@@ -1278,11 +1329,20 @@ def run_backtest_unified(payload: Dict = Body(...)):
             errors = legacy_validate_values(values)
             if errors:
                 return _error_response("LEGACY_VALIDATION_ERROR", "; ".join(errors), 400)
-            legacy_raw = _run_legacy_backtest(values)
-            results.append(backtest_service.to_unified_legacy(symbol, legacy_raw.get("output", ""), legacy_raw.get("returncode", 1)))
 
+            legacy_raw = _run_legacy_backtest(values, timeout_sec=legacy_timeout_sec)
+            legacy_result = backtest_service.to_unified_legacy(symbol, legacy_raw.get("output", ""), legacy_raw.get("returncode", 1))
+            if not legacy_raw.get("ok", False):
+                legacy_result["summary"]["status"] = "error"
+                if legacy_raw.get("error") == "timeout":
+                    legacy_result["summary"]["note"] = f"legacy timeout after {legacy_timeout_sec}s"
+                elif legacy_raw.get("output"):
+                    legacy_result["summary"]["note"] = str(legacy_raw.get("output"))[:280]
+            results.append(legacy_result)
+
+        ok = all((r.get("summary", {}).get("status") == "ok") for r in results) if results else False
         return {
-            "ok": True,
+            "ok": ok,
             "mode": mode,
             "results": results,
         }

@@ -700,13 +700,43 @@
       timeframe:document.getElementById('btTf').value,
       fast_window:parseInt(document.getElementById('btFast').value,10),
       slow_window:parseInt(document.getElementById('btSlow').value,10),
+      quick_timeout_sec:20,
+      legacy_timeout_sec:120,
     };
-    const r=await fetch('/api/backtest/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-    const j=await r.json();
+
+    const controller = new AbortController();
+    const abortId = setTimeout(()=>controller.abort(), 175000);
+    let j;
+    try {
+      const r=await fetch('/api/backtest/run',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify(payload),
+        signal: controller.signal,
+      });
+      const text = await r.text();
+      try {
+        j = text ? JSON.parse(text) : {ok:false, error:{code:'EMPTY_RESPONSE', message:'No response body'}};
+      } catch {
+        j = {ok:false, error:{code:'INVALID_JSON', message:text?.slice(0,500)||'Non-JSON response'}};
+      }
+      if(!r.ok && !j.error){
+        j = {ok:false, error:{code:'HTTP_ERROR', message:`HTTP ${r.status}`}, results:j?.results||[]};
+      }
+    } catch (e) {
+      if(e?.name==='AbortError'){
+        j = {ok:false, error:{code:'CLIENT_TIMEOUT', message:'Request timed out. Try quick mode or narrower legacy params.'}, results:[]};
+      } else {
+        throw e;
+      }
+    } finally {
+      clearTimeout(abortId);
+    }
+
     document.getElementById('btOut').textContent=JSON.stringify(j,null,2);
     btLastResults=j.results||[];
     renderCompare(btLastResults);
-    const chartSource=btLastResults.find(x=>x.engine==='quick') || btLastResults[0];
+    const chartSource=btLastResults.find(x=>x.engine==='quick' && x?.summary?.status==='ok') || btLastResults.find(x=>x.engine==='quick') || btLastResults[0];
     if(chartSource?.equity_curve?.labels?.length){
       renderUnifiedChart(chartSource);
     } else {
