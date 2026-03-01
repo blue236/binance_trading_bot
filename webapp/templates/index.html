@@ -222,6 +222,7 @@
   let priceChartLoadSeq = 0;
   let activeTimeframe = initialConfig.timeframe || '1h';
   const chartUiState = {showMarkers:true, showEma:true, showBb:false, showVolume:false};
+  const STABLE_CHART_MODE = true; // hotfix mode: prioritize reliability over advanced interactions
 
   function closeFullscreenChart(){
     const overlay=document.getElementById('chartFsOverlay');
@@ -439,6 +440,16 @@
     try{ inst.destroy(); }catch(err){ console.warn('Chart destroy failed (ignored):', err); }
   }
 
+  function zoomOptions(){
+    if(STABLE_CHART_MODE) return {};
+    return {
+      zoom:{
+        pan:{enabled:true,modifierKey:'shift',mode:'x'},
+        zoom:{wheel:{enabled:true},pinch:{enabled:true},mode:'x'}
+      }
+    };
+  }
+
   const crosshairPlugin={
     id:'btbCrosshair',
     afterDraw(chart,args,pluginOptions){
@@ -529,13 +540,12 @@
     const chartConfig={
       type:'line',
       data:{labels,datasets},
-      plugins:[crosshairPlugin],
+      plugins: STABLE_CHART_MODE ? [] : [crosshairPlugin],
       options:{
         maintainAspectRatio:true,
         animation:false,
-        interaction:{mode:'index',intersect:false},
+        interaction: STABLE_CHART_MODE ? {mode:'nearest',intersect:false} : {mode:'index',intersect:false},
         normalized:true,
-        parsing:false,
         scales:{
           x:{ticks:{maxTicksLimit:12}},
           y:{position:'left'},
@@ -544,10 +554,7 @@
         plugins:{
           legend:{display:true},
           decimation:{enabled:false},
-          zoom:{
-            pan:{enabled:true,modifierKey:'shift',mode:'x'},
-            zoom:{wheel:{enabled:true},pinch:{enabled:true},mode:'x'}
-          },
+          ...zoomOptions(),
           tooltip:{callbacks:{afterBody:afterBodyCb}}
         }
       }
@@ -852,12 +859,12 @@
     const btConfig={
       type:'line',
       data:{labels,datasets:[{label:`${result?.engine||'backtest'} equity`,data:values,borderColor:'#2563eb',pointRadius:0,tension:0.1}]},
-      plugins:[markerPlugin(markers),crosshairPlugin],
+      plugins: STABLE_CHART_MODE ? [markerPlugin(markers)] : [markerPlugin(markers),crosshairPlugin],
       options:{
         animation:false,
-        interaction:{mode:'index',intersect:false},
+        interaction: STABLE_CHART_MODE ? {mode:'nearest',intersect:false} : {mode:'index',intersect:false},
         plugins:{
-          zoom:{pan:{enabled:true,modifierKey:'shift',mode:'x'},zoom:{wheel:{enabled:true},pinch:{enabled:true},mode:'x'}}
+          ...zoomOptions()
         }
       }
     };
