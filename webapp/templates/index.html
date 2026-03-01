@@ -247,12 +247,24 @@
     options.maintainAspectRatio = false;
 
     if(fsChart){ fsChart.destroy(); }
-    fsChart = new Chart(ctx, {
-      type: source.config?.type || 'line',
-      data,
-      options,
-      plugins: source.config?.plugins || []
-    });
+    try{
+      fsChart = new Chart(ctx, {
+        type: source.config?.type || 'line',
+        data,
+        options,
+        plugins: source.config?.plugins || []
+      });
+    } catch(err){
+      console.warn('Fullscreen chart render failed with plugins; retrying safe mode.', err);
+      const safePlugins={...(options.plugins||{})};
+      delete safePlugins.zoom;
+      fsChart = new Chart(ctx, {
+        type: source.config?.type || 'line',
+        data,
+        options:{...options, plugins:safePlugins, interaction:{mode:'nearest',intersect:false}},
+        plugins: []
+      });
+    }
   }
 
   function setupChartFullscreen(){
@@ -499,7 +511,8 @@
     const existing = Chart.getChart(ctx);
     if(existing) existing.destroy();
     if(chart) chart.destroy();
-    chart=new Chart(ctx,{
+
+    const chartConfig={
       type:'line',
       data:{labels,datasets},
       plugins:[crosshairPlugin],
@@ -539,7 +552,26 @@
           }
         }
       }
-    });
+    };
+
+    try{
+      chart=new Chart(ctx, chartConfig);
+    } catch(err){
+      console.warn('Price chart render failed with interactive plugins; retrying safe mode.', err);
+      const stale = Chart.getChart(ctx);
+      if(stale) stale.destroy();
+      const fallbackPlugins={...(chartConfig.options?.plugins||{})};
+      delete fallbackPlugins.zoom;
+      chart=new Chart(ctx,{
+        ...chartConfig,
+        plugins:[],
+        options:{
+          ...chartConfig.options,
+          interaction:{mode:'nearest',intersect:false},
+          plugins:fallbackPlugins,
+        }
+      });
+    }
 
     const p=j.signal_params||{};
     const note=(j.signal_note||'').trim();
@@ -699,12 +731,16 @@
     return {
       id:'markerOverlay',
       afterDatasetsDraw(chart){
-        const {ctx, scales:{x,y}}=chart;
         if(!markers || !markers.length) return;
+        const ctx = chart?.ctx;
+        const x = chart?.scales?.x;
+        const y = chart?.scales?.y;
+        if(!ctx || !x || !y) return;
         ctx.save();
         markers.forEach(m=>{
           const px=x.getPixelForValue(m.index);
           const py=y.getPixelForValue(m.price);
+          if(!Number.isFinite(px) || !Number.isFinite(py)) return;
           m._px = px; m._py = py;
           ctx.fillStyle = m.side==='BUY' ? '#16a34a' : '#dc2626';
           ctx.beginPath();
@@ -802,8 +838,40 @@
     let markers=(result?.trades||[]).map(t=>({index:t.index,ts:t.ts||labels[t.index],price:t.price,side:t.side,reason:t.reason||t.reason_code}));
     if(!markers.length) markers=buildMockMarkers(labels, values);
 
+    const existing = Chart.getChart(ctx);
+    if(existing) existing.destroy();
     if(btChart) btChart.destroy();
-    btChart=new Chart(ctx,{type:'line',data:{labels,datasets:[{label:`${result?.engine||'backtest'} equity`,data:values,borderColor:'#2563eb',pointRadius:0,tension:0.1}]},plugins:[markerPlugin(markers),crosshairPlugin],options:{animation:false,interaction:{mode:'index',intersect:false},plugins:{zoom:{pan:{enabled:true,modifierKey:'shift',mode:'x'},zoom:{wheel:{enabled:true},pinch:{enabled:true},mode:'x'}}}}});
+
+    const btConfig={
+      type:'line',
+      data:{labels,datasets:[{label:`${result?.engine||'backtest'} equity`,data:values,borderColor:'#2563eb',pointRadius:0,tension:0.1}]},
+      plugins:[markerPlugin(markers),crosshairPlugin],
+      options:{
+        animation:false,
+        interaction:{mode:'index',intersect:false},
+        plugins:{
+          zoom:{pan:{enabled:true,modifierKey:'shift',mode:'x'},zoom:{wheel:{enabled:true},pinch:{enabled:true},mode:'x'}}
+        }
+      }
+    };
+
+    try{
+      btChart=new Chart(ctx, btConfig);
+    } catch(err){
+      console.warn('Backtest chart render failed with interactive plugins; retrying safe mode.', err);
+      const stale = Chart.getChart(ctx);
+      if(stale) stale.destroy();
+      btChart=new Chart(ctx,{
+        ...btConfig,
+        plugins:[],
+        options:{
+          ...btConfig.options,
+          interaction:{mode:'nearest',intersect:false},
+          plugins:{}
+        }
+      });
+    }
+
     bindMarkerTooltip(markers);
     document.getElementById('btMarkerStatus').textContent = `Markers: ${markers.length} (${markers.length? 'overlay active':'none'})`;
   }
