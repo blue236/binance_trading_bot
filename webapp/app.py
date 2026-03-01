@@ -772,20 +772,37 @@ def _error_response(code: str, message: str, status_code: int = 400):
     return JSONResponse(status_code=status_code, content={"ok": False, "error": {"code": code, "message": message}})
 
 
-def _run_legacy_backtest(values: Dict):
+def _run_legacy_backtest(values: Dict, timeout_sec: int = 120):
     cmd = legacy_build_command(values)
-    proc = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True)
-    raw_output = (proc.stdout or "")
-    if not raw_output.strip():
-        raw_output = proc.stderr or ""
-    output = _clean_console_output(raw_output)
-    plots = list_plot_files()
-    return {
-        "ok": proc.returncode == 0,
-        "returncode": proc.returncode,
-        "output": output,
-        "plots": plots,
-    }
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=str(ROOT),
+            capture_output=True,
+            text=True,
+            timeout=max(10, int(timeout_sec)),
+        )
+        raw_output = (proc.stdout or "")
+        if not raw_output.strip():
+            raw_output = proc.stderr or ""
+        output = _clean_console_output(raw_output)
+        plots = list_plot_files()
+        return {
+            "ok": proc.returncode == 0,
+            "returncode": proc.returncode,
+            "output": output,
+            "plots": plots,
+        }
+    except subprocess.TimeoutExpired as e:
+        raw_output = ((e.stdout or "") + "\n" + (e.stderr or "")).strip()
+        output = _clean_console_output(raw_output) or f"Legacy backtest timed out after {timeout_sec}s"
+        return {
+            "ok": False,
+            "returncode": 124,
+            "output": output,
+            "plots": list_plot_files(),
+            "error": "timeout",
+        }
 
 
 @app.on_event("startup")

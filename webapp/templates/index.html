@@ -755,7 +755,7 @@
   document.getElementById('configBtn').onclick=()=>{const p=document.getElementById('configPanel');p.style.display=p.style.display==='none'?'block':'none';};
   document.getElementById('cfgLoad').onclick=()=>withButtonProgress('cfgLoad','Loading...',loadConfig);
   document.getElementById('cfgSave').onclick=()=>withButtonProgress('cfgSave','Saving...',saveConfig);
-  document.getElementById('btUnifiedRun').onclick=()=>withButtonProgress('btUnifiedRun','Running...',runBacktest);
+  document.getElementById('btUnifiedRun').onclick=()=>withButtonProgress('btUnifiedRun','Running...',runBacktest,{timeoutMs:180000});
   document.getElementById('legacyRun').onclick=()=>withButtonProgress('legacyRun','Processing...',runLegacyBacktester);
   document.getElementById('aiStart').onclick=()=>withButtonProgress('aiStart','Starting...',aiStart,{restoreDisabled:false});
   document.getElementById('aiStop').onclick=()=>withButtonProgress('aiStop','Stopping...',aiStop,{restoreDisabled:false});
