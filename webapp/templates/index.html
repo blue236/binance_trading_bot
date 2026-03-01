@@ -219,6 +219,7 @@
   const initialConfig = {{ config | tojson }};
   let chart;
   let fsChart;
+  let priceChartLoadSeq = 0;
   let activeTimeframe = initialConfig.timeframe || '1h';
   const chartUiState = {showMarkers:true, showEma:true, showBb:false, showVolume:false};
 
@@ -441,8 +442,10 @@
   };
 
   async function loadChart(symbol){
+    const seq = ++priceChartLoadSeq;
     const r=await fetch(`/api/charts?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(activeTimeframe)}`);
     const j=await r.json();
+    if(seq !== priceChartLoadSeq) return; // stale response from an older request
     const ctx=document.getElementById('priceChart');
     const labels=j.labels||[];
     const closes=j.values||[];
@@ -477,6 +480,8 @@
       datasets.push({type:'bar',label:'Volume',data:volumes,backgroundColor:'rgba(71,85,105,0.35)',borderWidth:0,yAxisID:'yVol',barPercentage:1,categoryPercentage:1});
     }
 
+    const existing = Chart.getChart(ctx);
+    if(existing) existing.destroy();
     if(chart) chart.destroy();
     chart=new Chart(ctx,{
       type:'line',
