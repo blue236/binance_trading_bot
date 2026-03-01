@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Binance Trading Bot - Unified Web UI</title>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
   <style>
     body{font-family:Arial,Helvetica,sans-serif;margin:20px;background:#f6f7fb}
     .tabs{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap}
@@ -42,6 +43,11 @@
     .chart-fs-head{display:flex;justify-content:space-between;align-items:center}
     .chart-fs-canvas-wrap{flex:1;min-height:0}
     .chart-fs-canvas-wrap canvas{width:100% !important;height:100% !important}
+    .chart-toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px}
+    .chart-toolbar button{padding:7px 10px;min-height:36px;background:#334155}
+    .chart-toolbar button.active{background:#2563eb}
+    .chart-toolbar .chip{background:#e2e8f0;color:#1f2937;border-radius:999px;padding:6px 10px;font-size:12px}
+    .hover-panel{background:#f8fafc;border:1px solid #cbd5e1;border-radius:8px;padding:8px 10px;font-size:12px;color:#0f172a;margin-top:8px}
     @media (max-width: 768px){
       body{margin:10px}
       h1{font-size:1.2rem}
@@ -108,8 +114,24 @@
     </div>
 
     <div class="card">
-      <canvas id="priceChart" class="chart-enlargeable" height="100" title="Click to enlarge"></canvas>
+      <div class="chart-toolbar">
+        <span class="chip">Timeframe</span>
+        <button id="tf15m" type="button">15m</button>
+        <button id="tf1h" type="button" class="active">1h</button>
+        <button id="tf4h" type="button">4h</button>
+        <button id="tf1d" type="button">1d</button>
+        <span class="chip">Overlays</span>
+        <button id="toggleMarkers" type="button" class="active">Markers</button>
+        <button id="toggleEma" type="button" class="active">EMA</button>
+        <button id="toggleBb" type="button">BB</button>
+        <button id="toggleVolume" type="button">Volume</button>
+        <button id="resetZoom" type="button">Reset Zoom</button>
+        <button id="downloadChart" type="button">Download PNG</button>
+      </div>
+      <canvas id="priceChart" class="chart-enlargeable" height="110" title="Click to enlarge"></canvas>
+      <div class="hover-panel" id="priceHoverInfo">Hover crosshair info: -</div>
       <div class="muted" id="priceMarkerStatus">Signals: (none)</div>
+      <div class="muted">Controls: Mouse wheel zoom · Shift + drag pan · Hover to inspect candle/signal context.</div>
     </div>
 
     <div class="card" id="configPanel" style="display:none;">
@@ -197,6 +219,8 @@
   const initialConfig = {{ config | tojson }};
   let chart;
   let fsChart;
+  let activeTimeframe = initialConfig.timeframe || '1h';
+  const chartUiState = {showMarkers:true, showEma:true, showBb:false, showVolume:false};
 
   function closeFullscreenChart(){
     const overlay=document.getElementById('chartFsOverlay');
@@ -387,38 +411,108 @@
     return arr;
   }
 
+  function nullifyNaNs(arr){
+    return (arr||[]).map(v=>Number.isFinite(Number(v))? Number(v): null);
+  }
+
+  function setBtnActive(id, on){
+    const el=document.getElementById(id);
+    if(!el) return;
+    el.classList.toggle('active', !!on);
+  }
+
+  const crosshairPlugin={
+    id:'btbCrosshair',
+    afterDraw(chart,args,pluginOptions){
+      const active=chart.tooltip?.getActiveElements?.()||[];
+      if(!active.length) return;
+      const {ctx, chartArea:{top,bottom}}=chart;
+      const x=active[0].element.x;
+      ctx.save();
+      ctx.beginPath();
+      ctx.moveTo(x,top);
+      ctx.lineTo(x,bottom);
+      ctx.lineWidth=1;
+      ctx.strokeStyle='#64748b';
+      ctx.setLineDash([4,4]);
+      ctx.stroke();
+      ctx.restore();
+    }
+  };
+
   async function loadChart(symbol){
-    const r=await fetch(`/api/charts?symbol=${encodeURIComponent(symbol)}`);
+    const r=await fetch(`/api/charts?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(activeTimeframe)}`);
     const j=await r.json();
     const ctx=document.getElementById('priceChart');
     const labels=j.labels||[];
     const closes=j.values||[];
+    const highs=j.highs||[];
+    const lows=j.lows||[];
+    const volumes=j.volumes||[];
+    const indicators=j.indicators||{};
     const markers=j.markers||[];
     const markerByIndex=new Map((markers||[]).map(m=>[Number(m.index),m]));
 
     const buySeries=markerSeries(labels, markers, 'buy');
     const sellSeries=markerSeries(labels, markers, 'sell');
 
+    const datasets=[
+      {label:`${j.symbol} close`,data:closes,borderColor:'#2b6cb0',backgroundColor:'rgba(37,99,235,0.08)',fill:false,pointRadius:0,tension:0.08,yAxisID:'y'}
+    ];
+
+    if(chartUiState.showEma){
+      datasets.push({label:`EMA ${j.signal_params?.fast || 'fast'}`,data:nullifyNaNs(indicators.ema_fast),borderColor:'#f59e0b',pointRadius:0,tension:0.05,borderWidth:1.5,yAxisID:'y'});
+      datasets.push({label:`EMA ${j.signal_params?.slow || 'slow'}`,data:nullifyNaNs(indicators.ema_slow),borderColor:'#8b5cf6',pointRadius:0,tension:0.05,borderWidth:1.5,yAxisID:'y'});
+    }
+    if(chartUiState.showBb){
+      datasets.push({label:'BB Upper',data:nullifyNaNs(indicators.bb_upper),borderColor:'#94a3b8',pointRadius:0,borderDash:[5,4],borderWidth:1,yAxisID:'y'});
+      datasets.push({label:'BB Mid',data:nullifyNaNs(indicators.bb_mid),borderColor:'#64748b',pointRadius:0,borderWidth:1,yAxisID:'y'});
+      datasets.push({label:'BB Lower',data:nullifyNaNs(indicators.bb_lower),borderColor:'#94a3b8',pointRadius:0,borderDash:[5,4],borderWidth:1,yAxisID:'y'});
+    }
+    if(chartUiState.showMarkers){
+      datasets.push({label:'BUY',data:buySeries,showLine:false,pointRadius:6,pointHoverRadius:7,pointStyle:'triangle',backgroundColor:'#16a34a',borderColor:'#16a34a',yAxisID:'y'});
+      datasets.push({label:'SELL',data:sellSeries,showLine:false,pointRadius:6,pointHoverRadius:7,pointStyle:'rectRot',backgroundColor:'#dc2626',borderColor:'#dc2626',yAxisID:'y'});
+    }
+    if(chartUiState.showVolume){
+      datasets.push({type:'bar',label:'Volume',data:volumes,backgroundColor:'rgba(71,85,105,0.35)',borderWidth:0,yAxisID:'yVol',barPercentage:1,categoryPercentage:1});
+    }
+
     if(chart) chart.destroy();
     chart=new Chart(ctx,{
       type:'line',
-      data:{
-        labels,
-        datasets:[
-          {label:`${j.symbol} close`,data:closes,borderColor:'#2b6cb0',pointRadius:0,tension:0.1},
-          {label:'BUY',data:buySeries,showLine:false,pointRadius:7,pointHoverRadius:8,pointStyle:'triangle',backgroundColor:'#16a34a',borderColor:'#16a34a',pointBackgroundColor:'#16a34a',pointBorderColor:'#065f46',pointBorderWidth:1.5},
-          {label:'SELL',data:sellSeries,showLine:false,pointRadius:7,pointHoverRadius:8,pointStyle:'rectRot',backgroundColor:'#dc2626',borderColor:'#dc2626',pointBackgroundColor:'#dc2626',pointBorderColor:'#7f1d1d',pointBorderWidth:1.5}
-        ]
-      },
+      data:{labels,datasets},
+      plugins:[crosshairPlugin],
       options:{
+        maintainAspectRatio:true,
+        animation:false,
+        interaction:{mode:'index',intersect:false},
+        normalized:true,
+        parsing:false,
+        scales:{
+          x:{ticks:{maxTicksLimit:12}},
+          y:{position:'left'},
+          yVol:{display:chartUiState.showVolume,position:'right',grid:{drawOnChartArea:false}}
+        },
         plugins:{
+          legend:{display:true},
+          decimation:{enabled:true,algorithm:'lttb',samples:350},
+          zoom:{
+            pan:{enabled:true,modifierKey:'shift',mode:'x'},
+            zoom:{wheel:{enabled:true},pinch:{enabled:true},mode:'x'}
+          },
           tooltip:{
             callbacks:{
               afterBody:(items)=>{
                 if(!items?.length) return '';
                 const idx=items[0].dataIndex;
                 const m=markerByIndex.get(Number(idx));
-                return m ? `signal: ${String(m.side||'').toUpperCase()} (${m.reason||'config crossover'})` : '';
+                const line=[`high: ${highs[idx] ?? '-'}`,`low: ${lows[idx] ?? '-'}`,`volume: ${volumes[idx] ?? '-'}`];
+                if(m) line.push(`signal: ${String(m.side||'').toUpperCase()} (${m.reason||'config crossover'})`);
+                const hover=document.getElementById('priceHoverInfo');
+                if(hover){
+                  hover.textContent=`${labels[idx] || '-'} · close ${closes[idx] ?? '-'} · high ${highs[idx] ?? '-'} · low ${lows[idx] ?? '-'} · volume ${volumes[idx] ?? '-'}${m ? ` · signal ${String(m.side||'').toUpperCase()}` : ''}`;
+                }
+                return line;
               }
             }
           }
@@ -430,15 +524,15 @@
     const note=(j.signal_note||'').trim();
     const status=document.getElementById('priceMarkerStatus');
     if(markers.length){
-      status.textContent=`Signals: BUY/SELL ${markers.length} events · basis=${j.signal_basis||'config crossover'} · fast=${p.fast ?? '-'}, slow=${p.slow ?? '-'}${note ? ` · ${note}` : ''}`;
+      status.textContent=`Signals: BUY/SELL ${markers.length} events · tf=${j.timeframe||activeTimeframe} · basis=${j.signal_basis||'config crossover'} · fast=${p.fast ?? '-'}, slow=${p.slow ?? '-'}${note ? ` · ${note}` : ''}`;
     }else{
-      status.textContent=`Signals: (none) · basis=${j.signal_basis||'config crossover'} · fast=${p.fast ?? '-'}, slow=${p.slow ?? '-'}${note ? ` · ${note}` : ''}`;
+      status.textContent=`Signals: (none) · tf=${j.timeframe||activeTimeframe} · basis=${j.signal_basis||'config crossover'} · fast=${p.fast ?? '-'}, slow=${p.slow ?? '-'}${note ? ` · ${note}` : ''}`;
     }
   }
 
   async function refreshCharts(){
     const symbol=document.getElementById('symbol').value;
-    const r=await fetch(`/api/charts/refresh2?symbol=${encodeURIComponent(symbol)}`);
+    const r=await fetch(`/api/charts/refresh2?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(activeTimeframe)}`);
     const j=await r.json();
     if(!r.ok || (j && j.ok===false && !j.refreshed?.length)){
       throw new Error((j?.errors && Object.values(j.errors).join('; ')) || j?.error || 'Refresh failed');
@@ -688,7 +782,7 @@
     if(!markers.length) markers=buildMockMarkers(labels, values);
 
     if(btChart) btChart.destroy();
-    btChart=new Chart(ctx,{type:'line',data:{labels,datasets:[{label:`${result?.engine||'backtest'} equity`,data:values,borderColor:'#2563eb',pointRadius:0,tension:0.1}]},plugins:[markerPlugin(markers)]});
+    btChart=new Chart(ctx,{type:'line',data:{labels,datasets:[{label:`${result?.engine||'backtest'} equity`,data:values,borderColor:'#2563eb',pointRadius:0,tension:0.1}]},plugins:[markerPlugin(markers),crosshairPlugin],options:{animation:false,interaction:{mode:'index',intersect:false},plugins:{zoom:{pan:{enabled:true,modifierKey:'shift',mode:'x'},zoom:{wheel:{enabled:true},pinch:{enabled:true},mode:'x'}}}}});
     bindMarkerTooltip(markers);
     document.getElementById('btMarkerStatus').textContent = `Markers: ${markers.length} (${markers.length? 'overlay active':'none'})`;
   }
@@ -781,6 +875,27 @@
     };
   });
 
+  [['tf15m','15m'],['tf1h','1h'],['tf4h','4h'],['tf1d','1d']].forEach(([id,tf])=>{
+    document.getElementById(id).onclick=()=>withButtonProgress(id,'Loading...',async ()=>{
+      activeTimeframe=tf;
+      ['tf15m','tf1h','tf4h','tf1d'].forEach(x=>setBtnActive(x,x===id));
+      await refreshCharts();
+    });
+  });
+
+  document.getElementById('toggleMarkers').onclick=()=>{ chartUiState.showMarkers=!chartUiState.showMarkers; setBtnActive('toggleMarkers',chartUiState.showMarkers); loadChart(document.getElementById('symbol').value); };
+  document.getElementById('toggleEma').onclick=()=>{ chartUiState.showEma=!chartUiState.showEma; setBtnActive('toggleEma',chartUiState.showEma); loadChart(document.getElementById('symbol').value); };
+  document.getElementById('toggleBb').onclick=()=>{ chartUiState.showBb=!chartUiState.showBb; setBtnActive('toggleBb',chartUiState.showBb); loadChart(document.getElementById('symbol').value); };
+  document.getElementById('toggleVolume').onclick=()=>{ chartUiState.showVolume=!chartUiState.showVolume; setBtnActive('toggleVolume',chartUiState.showVolume); loadChart(document.getElementById('symbol').value); };
+  document.getElementById('resetZoom').onclick=()=>{ chart?.resetZoom?.(); btChart?.resetZoom?.(); };
+  document.getElementById('downloadChart').onclick=()=>{
+    if(!chart) return;
+    const a=document.createElement('a');
+    a.href=chart.toBase64Image();
+    a.download=`btb-${document.getElementById('symbol').value.replace('/','_')}-${activeTimeframe}.png`;
+    a.click();
+  };
+
   document.getElementById('refreshBtn').onclick=()=>withButtonProgress('refreshBtn','Refreshing...',refreshCharts);
   document.getElementById('configBtn').onclick=()=>{const p=document.getElementById('configPanel');p.style.display=p.style.display==='none'?'block':'none';};
   document.getElementById('cfgLoad').onclick=()=>withButtonProgress('cfgLoad','Loading...',loadConfig);
@@ -798,6 +913,9 @@
   document.getElementById('secSave').onclick=()=>withButtonProgress('secSave','Saving...',saveSecrets);
 
   setupInteractiveUi();
+  ['tf15m','tf1h','tf4h','tf1d'].forEach(id=>setBtnActive(id,false));
+  const tfMap={'15m':'tf15m','1h':'tf1h','4h':'tf4h','1d':'tf1d'};
+  setBtnActive(tfMap[activeTimeframe] || 'tf1h', true);
   setupSymbols();
   setupChartFullscreen();
   loadChart('{{ default_symbol }}');

@@ -27,6 +27,16 @@ This branch introduces a new modular **web-first architecture** to make feature 
    - Run ROI simulation from UI
    - Shows ROI, drawdown, trades, equity curve data in result panel
 
+## Chart UX v1 (Investing-style practical bundle)
+
+- Timeframe quick switch: `15m / 1h / 4h / 1d`
+- Mouse interactions: wheel zoom + `Shift+Drag` pan on price/backtest charts
+- Rich hover context: timestamp, close/high/low, volume, and signal reason
+- Trading overlays: EMA fast/slow (from config), optional Bollinger Bands
+- Optional volume bars overlay (right axis)
+- Toolbar actions: reset zoom, download chart PNG, toggle markers/EMA/BB/volume
+- Fullscreen compatibility retained for both price/backtest charts
+
 ## Run
 
 ```bash

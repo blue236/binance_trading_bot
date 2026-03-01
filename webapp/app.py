@@ -968,6 +968,31 @@ def _moving_average(values: list[float], window: int) -> list[float | None]:
     return out
 
 
+def _stddev_series(values: list[float], window: int) -> list[float | None]:
+    if window <= 1:
+        return [None] * len(values)
+    out: list[float | None] = [None] * len(values)
+    for i in range(window - 1, len(values)):
+        chunk = values[i - window + 1 : i + 1]
+        mean = sum(chunk) / float(window)
+        variance = sum((v - mean) ** 2 for v in chunk) / float(window)
+        out[i] = variance ** 0.5
+    return out
+
+
+def _bollinger_bands(values: list[float], window: int = 20, sigma: float = 2.0) -> tuple[list[float | None], list[float | None], list[float | None]]:
+    ma = _moving_average(values, window)
+    sd = _stddev_series(values, window)
+    upper: list[float | None] = [None] * len(values)
+    lower: list[float | None] = [None] * len(values)
+    for i in range(len(values)):
+        if ma[i] is None or sd[i] is None:
+            continue
+        upper[i] = float(ma[i]) + float(sigma) * float(sd[i])
+        lower[i] = float(ma[i]) - float(sigma) * float(sd[i])
+    return ma, upper, lower
+
+
 def _effective_main_config() -> dict:
     cfg = _load_main_cfg()
     if not isinstance(cfg, dict):
@@ -1054,22 +1079,40 @@ def _build_price_signal_markers(labels: list[str], closes: list[float], fast: in
 
 
 @app.get("/api/charts")
-def get_chart(symbol: str):
+def get_chart(symbol: str, timeframe: str | None = None, limit: int | None = None):
     runtime = _chart_runtime_params()
     fast, slow = _signal_params_from_main_config()
 
-    display_limit = int(runtime["history_limit"])
-    calc_limit = max(display_limit + slow + 5, display_limit)
-    rows = storage.fetch_ohlcv(symbol, runtime["timeframe"], limit=calc_limit)
+    tf = (timeframe or runtime["timeframe"]).strip()
+    display_limit = max(100, int(limit or runtime["history_limit"]))
+    calc_limit = max(display_limit + max(slow, 20) + 25, display_limit)
+    rows = storage.fetch_ohlcv(symbol, tf, limit=calc_limit)
 
-    labels_all = [dt.datetime.utcfromtimestamp(int(ts) / 1000).strftime("%Y-%m-%d") for ts, *_ in rows]
+    labels_all = [dt.datetime.utcfromtimestamp(int(ts) / 1000).strftime("%Y-%m-%d %H:%M") for ts, *_ in rows]
     closes_all = [float(c) for _, _, _, _, c, _ in rows]
+    volumes_all = [float(v) for *_, v in rows]
+    highs_all = [float(h) for _, _, h, _, _, _ in rows]
+    lows_all = [float(l) for _, _, _, l, _, _ in rows]
+
+    ema_fast_all = _moving_average(closes_all, fast)
+    ema_slow_all = _moving_average(closes_all, slow)
+    bb_mid_all, bb_upper_all, bb_lower_all = _bollinger_bands(closes_all, window=20, sigma=2.0)
+
     markers_all = _build_price_signal_markers(labels_all, closes_all, fast=fast, slow=slow)
     insufficient_signal_data = len(closes_all) < (slow + 2)
 
     trim_start = max(0, len(labels_all) - display_limit)
     labels = labels_all[trim_start:]
     closes = closes_all[trim_start:]
+    volumes = volumes_all[trim_start:]
+    highs = highs_all[trim_start:]
+    lows = lows_all[trim_start:]
+
+    ema_fast = ema_fast_all[trim_start:]
+    ema_slow = ema_slow_all[trim_start:]
+    bb_mid = bb_mid_all[trim_start:]
+    bb_upper = bb_upper_all[trim_start:]
+    bb_lower = bb_lower_all[trim_start:]
 
     markers = []
     for m in markers_all:
@@ -1082,9 +1125,21 @@ def get_chart(symbol: str):
 
     return {
         "symbol": symbol,
-        "timeframe": runtime["timeframe"],
+        "timeframe": tf,
         "labels": labels,
         "values": closes,
+        "highs": highs,
+        "lows": lows,
+        "volumes": volumes,
+        "indicators": {
+            "ema_fast": ema_fast,
+            "ema_slow": ema_slow,
+            "bb_mid": bb_mid,
+            "bb_upper": bb_upper,
+            "bb_lower": bb_lower,
+            "bb_window": 20,
+            "bb_sigma": 2.0,
+        },
         "signal_basis": f"config.yaml ({'aggressive' if bool((_load_main_cfg().get('general') or {}).get('aggressive_mode', False)) else 'normal'}) strategy.ema_fast/ema_slow crossover",
         "signal_params": {"fast": fast, "slow": slow},
         "signal_note": f"Need at least {slow + 2} candles for reliable EMA crossover (current={len(closes_all)})" if insufficient_signal_data else "",
@@ -1125,10 +1180,37 @@ def refresh_charts(req: RefreshRequest = Body(default=RefreshRequest())):
 
 
 @app.get("/api/charts/refresh2")
-def refresh_charts_v2(symbol: str | None = None):
-    cfg = config_mgr.load()
-    req = RefreshRequest(symbols=[symbol] if symbol else None)
-    return refresh_charts(req)
+def refresh_charts_v2(symbol: str | None = None, timeframe: str | None = None, limit: int | None = None):
+    runtime = _chart_runtime_params()
+    fast, slow = _signal_params_from_main_config()
+    tf = (timeframe or runtime["timeframe"]).strip()
+    base_limit = max(100, int(limit or runtime["history_limit"]))
+    refresh_limit = max(base_limit + slow + 5, base_limit)
+
+    targets = [symbol] if symbol else runtime["symbols"]
+    refreshed: list[str] = []
+    errors: dict[str, str] = {}
+
+    for sym in targets:
+        try:
+            with ThreadPoolExecutor(max_workers=1) as ex:
+                fut = ex.submit(chart_service.refresh_symbol, sym, tf, refresh_limit)
+                fut.result(timeout=20)
+            refreshed.append(sym)
+        except FuturesTimeoutError:
+            errors[sym] = "timeout while fetching OHLCV"
+        except Exception as e:
+            errors[sym] = str(e)
+
+    storage.set_meta("last_chart_refresh", dt.datetime.utcnow().isoformat(timespec="seconds"))
+    return {
+        "ok": len(errors) == 0,
+        "last_refresh": storage.get_meta("last_chart_refresh"),
+        "signal_params": {"fast": fast, "slow": slow},
+        "timeframe": tf,
+        "refreshed": refreshed,
+        "errors": errors,
+    }
 
 
 @app.post("/api/backtester/run")
