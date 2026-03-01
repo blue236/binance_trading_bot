@@ -89,9 +89,6 @@ Environment variables (`BINANCE_API_KEY`, `BINANCE_API_SECRET`, etc.) still over
 
 - QA release gate checklist: `QA_RELEASE_GATE_CHECKLIST.md`
 - Security cookie policy: `SECURITY_COOKIE_POLICY.md`
-- Mobile web QA report: `MOBILE_WEB_QA_REPORT.md`
-- M5 trading readiness report: `M5_TRADING_READINESS_REPORT_2026-02-22.md`
-- M6 controlled launch report: `M6_CONTROLLED_LAUNCH_REPORT_2026-02-22.md`
 - Controlled launch policy: `LAUNCH_POLICY.yaml`
 
 ## Gate scripts
