@@ -789,8 +789,35 @@ def regime_filter(exchange, symbol, cfg):
     logger = logging.getLogger("bot")
     tf = cfg["general"]["timeframe_regime"]
     st = cfg.get("strategy", {})
-    trend_adx_threshold = float(st.get("trend_adx_threshold", 20.0))
+    mode = str(st.get("mode", "legacy_hybrid")).lower()
+
     d = fetch_ohlc(exchange, symbol, tf, 400, cfg=cfg, logger=logger)
+
+    if mode == "h_v5_b_plus_breakeven_ema100":
+        ema_slow_len = int(st.get("ema_slow", 200))
+        regime_fast_len = int(st.get("regime_ema_fast", 50))
+        regime_rsi_len = int(st.get("regime_rsi_len", 14))
+        regime_rsi_min = float(st.get("regime_rsi_min", 55))
+
+        ema200 = EMAIndicator(d["c"], ema_slow_len).ema_indicator()
+        ema50 = EMAIndicator(d["c"], regime_fast_len).ema_indicator()
+        rsi_d = RSIIndicator(d["c"], regime_rsi_len).rsi()
+        slope_pos = (ema200.diff().iloc[-1] > 0)
+        is_trend = bool((d["c"].iloc[-1] > ema200.iloc[-1]) and slope_pos and (ema50.iloc[-1] > ema200.iloc[-1]) and (rsi_d.iloc[-1] >= regime_rsi_min))
+        logger.debug(
+            "Regime[V5] %s: close=%.6f ema200=%.6f ema50=%.6f slope_pos=%s rsi_d=%.2f>=%.2f -> %s",
+            symbol,
+            float(d["c"].iloc[-1]),
+            float(ema200.iloc[-1]),
+            float(ema50.iloc[-1]),
+            slope_pos,
+            float(rsi_d.iloc[-1]),
+            regime_rsi_min,
+            "trend" if is_trend else "none",
+        )
+        return ("trend" if is_trend else "none"), float("nan")
+
+    trend_adx_threshold = float(st.get("trend_adx_threshold", 20.0))
     ema200 = EMAIndicator(d["c"], st.get("ema_slow", 200)).ema_indicator()
     slope_pos = (ema200.diff().iloc[-1] > 0)
     adx_val = ADXIndicator(d["h"], d["l"], d["c"], st.get("adx_len", 14)).adx().iloc[-1]
@@ -835,7 +862,38 @@ def h1_signals(df, cfg, regime):
     params = {}
     mode = str(st.get("mode", "legacy_hybrid")).lower()
 
-    if mode == "mean_reversion_bb_regime":
+    if mode == "h_v5_b_plus_breakeven_ema100":
+        if regime != "trend":
+            logger.debug("V5 skip: regime=%s", regime)
+        else:
+            pull_ema_len = int(st.get("pullback_ema_len", st.get("ema_fast", 50)))
+            pull_band_atr = float(st.get("pullback_band_atr", 0.8))
+            pb_ema = EMAIndicator(df["c"], pull_ema_len).ema_indicator().iloc[-1]
+            ema20 = EMAIndicator(df["c"], int(st.get("momentum_ema_len", 20))).ema_indicator().iloc[-1]
+            breakout = (don_hi_prev is not None) and (close > don_hi_prev)
+            mom_ok = float(ema20) > float(pb_ema)
+            pullback = False
+            if atr_v > 0:
+                dist = abs(close - float(pb_ema))
+                pullback = (dist <= pull_band_atr * atr_v) and (40 <= rsiv <= 70) and mom_ok
+            breakout = bool(breakout and mom_ok and (close >= float(pb_ema)))
+            cond = (rsiv < float(st.get("rsi_overheat", 75))) and (breakout or pullback)
+            logger.debug(
+                "V5 check: breakout=%s pullback=%s mom_ok=%s close=%.6f pb_ema=%.6f rsi=%.2f cond=%s",
+                breakout,
+                pullback,
+                mom_ok,
+                close,
+                float(pb_ema),
+                rsiv,
+                cond,
+            )
+            if cond:
+                signal = "T_LONG"
+                params["sl"] = close - float(st.get("atr_sl_trend_mult", 2.5)) * atr_v
+                params["trail_mult"] = float(st.get("atr_trail_mult", 8.0))
+                params["entry_style"] = "BREAKOUT" if breakout else "PULLBACK"
+    elif mode == "mean_reversion_bb_regime":
         adx_max = float(st.get("mr_adx_max", 24))
         rsi_entry = float(st.get("mr_rsi_entry", st.get("rsi_mr_threshold", 35)))
         cond = (lower_v is not None) and (close <= lower_v) and (rsiv <= rsi_entry) and (adxv <= adx_max)
@@ -1272,6 +1330,9 @@ def main():
                         pos["tp_mid"] = params["tp_mid"]
                     if signal == "T_LONG" and "trail_mult" in params:
                         pos["trail_mult"] = params["trail_mult"]; pos["trail_ref"] = price
+                    if signal == "T_LONG" and str(cfg.get("strategy", {}).get("mode", "")).lower() == "h_v5_b_plus_breakeven_ema100":
+                        pos["init_r"] = max(float(price - sl), 1e-9)
+                        pos["breakeven_r"] = float(cfg.get("strategy", {}).get("breakeven_r", 1.0))
                     state["positions"][symbol] = pos
                     write_state(state_path, state)
                     allow_entries = len(state["positions"]) < cfg["risk"]["max_concurrent_positions"]
@@ -1304,6 +1365,44 @@ def main():
                     trail = hi_since - pos["trail_mult"] * atr
                     if trail > sl:
                         sl = trail; pos["sl"] = float(sl); changed = True
+
+                # H_V5 breakeven + structural daily EMA exit
+                strategy_mode = str(cfg.get("strategy", {}).get("mode", "")).lower()
+                if strategy_mode == "h_v5_b_plus_breakeven_ema100" and pos.get("signal") == "T_LONG":
+                    init_r = float(pos.get("init_r", max(float(pos.get("entry_price", last)) - float(pos.get("sl", sl)), 1e-9)))
+                    be_r = float(pos.get("breakeven_r", cfg.get("strategy", {}).get("breakeven_r", 1.0)))
+                    entry_px = float(pos.get("entry_price", last))
+                    if float(last) >= (entry_px + be_r * init_r):
+                        be_sl = max(float(pos.get("sl", sl)), entry_px)
+                        if be_sl > sl:
+                            sl = be_sl
+                            pos["sl"] = float(sl)
+                            changed = True
+
+                    if bool(cfg.get("strategy", {}).get("use_structural_exit", True)):
+                        d_df = fetch_ohlc(exchange, sym, cfg["general"].get("timeframe_regime", "1d"), 220, cfg=cfg, logger=logger)
+                        d_ema_len = int(cfg.get("strategy", {}).get("structural_exit_daily_ema_len", 100))
+                        need = int(cfg.get("strategy", {}).get("structural_exit_confirm_days", 2))
+                        d_ema = EMAIndicator(d_df["c"], d_ema_len).ema_indicator()
+                        below = (d_df["c"] < d_ema).tail(max(need, 1))
+                        if len(below) >= need and bool(below.all()):
+                            if approval_enabled:
+                                approved, tg_offset = request_trade_approval(
+                                    tg, action="SELL", symbol=sym, qty=qty, price=last,
+                                    timeout_sec=approval_timeout_sec, offset=tg_offset,
+                                )
+                                if not approved:
+                                    logger.info("Structural exit skipped (approval not granted): %s qty=%s", sym, qty)
+                                else:
+                                    place_order(exchange, sym, "sell", qty, price=last, dry_run=cfg["general"]["dry_run"])
+                                    logger.info("EXIT %s reason=STRUCTURAL_EXIT qty=%s price=%.4f", sym, qty, last)
+                                    finalize_exit(cfg, state, state_path, csv_dir, tg, sym, "STRUCTURAL_EXIT", last, qty)
+                                    continue
+                            else:
+                                place_order(exchange, sym, "sell", qty, price=last, dry_run=cfg["general"]["dry_run"])
+                                logger.info("EXIT %s reason=STRUCTURAL_EXIT qty=%s price=%.4f", sym, qty, last)
+                                finalize_exit(cfg, state, state_path, csv_dir, tg, sym, "STRUCTURAL_EXIT", last, qty)
+                                continue
 
                 # MR time stop or mid-band partial
                 if pos["signal"] == "R_LONG":
