@@ -35,6 +35,7 @@ strategy:
   breakeven_r: 1.0
   use_structural_exit: true
   structural_exit_daily_ema_len: 100
+  structural_exit_timeframe: 1d
   structural_exit_confirm_days: 2
   bb_len: 20
   bb_mult: 2.0
@@ -52,19 +53,32 @@ aggressive:
     max_concurrent_positions: 3
     cooldown_hours: 1
   strategy:
+    mode: h_v5_b_plus_breakeven_ema100
     adx_len: 14
-    trend_adx_threshold: 18
-    ema_fast: 50
+    trend_adx_threshold: 20
     ema_slow: 200
-    donchian_len: 20
-    rsi_overheat: 85
-    atr_sl_trend_mult: 1.6
-    atr_trail_mult: 3.5
+    regime_ema_fast: 50
+    regime_rsi_len: 14
+    regime_rsi_min: 55
+    donchian_len: 80
+    pullback_ema_len: 50
+    pullback_band_atr: 0.8
+    ema_fast: 50
+    rsi_len: 14
+    rsi_overheat: 75
+    atr_len: 14
+    atr_sl_trend_mult: 2.5
+    atr_trail_mult: 8.0
+    breakeven_r: 1.0
+    use_structural_exit: true
+    structural_exit_daily_ema_len: 100
+    structural_exit_timeframe: 1d
+    structural_exit_confirm_days: 2
     bb_len: 20
     bb_mult: 2.0
     atr_sl_mr_mult: 1.2
     rsi_mr_threshold: 35
-    mean_reversion_time_stop_hours: 12
+    mean_reversion_time_stop_hours: 24
   loop_sleep_seconds: 60
 alerts:
   enable_telegram: true

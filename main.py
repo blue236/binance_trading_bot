@@ -1380,7 +1380,8 @@ def main():
                             changed = True
 
                     if bool(cfg.get("strategy", {}).get("use_structural_exit", True)):
-                        d_df = fetch_ohlc(exchange, sym, cfg["general"].get("timeframe_regime", "1d"), 220, cfg=cfg, logger=logger)
+                        structural_tf = str(cfg.get("strategy", {}).get("structural_exit_timeframe", "1d") or "1d")
+                        d_df = fetch_ohlc(exchange, sym, structural_tf, 220, cfg=cfg, logger=logger)
                         d_ema_len = int(cfg.get("strategy", {}).get("structural_exit_daily_ema_len", 100))
                         need = int(cfg.get("strategy", {}).get("structural_exit_confirm_days", 2))
                         d_ema = EMAIndicator(d_df["c"], d_ema_len).ema_indicator()

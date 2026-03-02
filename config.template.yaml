@@ -33,6 +33,7 @@ strategy:
   breakeven_r: 1.0
   use_structural_exit: true
   structural_exit_daily_ema_len: 100
+  structural_exit_timeframe: 1d
   structural_exit_confirm_days: 2
   bb_len: 20
   bb_mult: 2.0
