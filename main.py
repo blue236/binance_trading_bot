@@ -1366,7 +1366,7 @@ def main():
                     if trail > sl:
                         sl = trail; pos["sl"] = float(sl); changed = True
 
-                # H_V5 breakeven + structural daily EMA exit
+                # H_V5 breakeven + structural daily EMA exit (NO LOOKAHEAD)
                 strategy_mode = str(cfg.get("strategy", {}).get("mode", "")).lower()
                 if strategy_mode == "h_v5_b_plus_breakeven_ema100" and pos.get("signal") == "T_LONG":
                     init_r = float(pos.get("init_r", max(float(pos.get("entry_price", last)) - float(pos.get("sl", sl)), 1e-9)))
@@ -1384,8 +1384,18 @@ def main():
                         d_df = fetch_ohlc(exchange, sym, structural_tf, 220, cfg=cfg, logger=logger)
                         d_ema_len = int(cfg.get("strategy", {}).get("structural_exit_daily_ema_len", 100))
                         need = int(cfg.get("strategy", {}).get("structural_exit_confirm_days", 2))
-                        d_ema = EMAIndicator(d_df["c"], d_ema_len).ema_indicator()
-                        below = (d_df["c"] < d_ema).tail(max(need, 1))
+
+                        # Avoid lookahead: drop current (possibly still-forming) candle
+                        # and compare previous close vs previous EMA.
+                        d_df_closed = d_df.iloc[:-1].copy()
+                        if len(d_df_closed) >= (d_ema_len + need + 5):
+                            d_ema = EMAIndicator(d_df_closed["c"], d_ema_len).ema_indicator()
+                            prev_close = d_df_closed["c"].shift(1)
+                            prev_ema = d_ema.shift(1)
+                            below = (prev_close < prev_ema).tail(max(need, 1))
+                        else:
+                            below = pd.Series([False] * max(need, 1))
+
                         if len(below) >= need and bool(below.all()):
                             if approval_enabled:
                                 approved, tg_offset = request_trade_approval(
