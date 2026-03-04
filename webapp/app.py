@@ -1372,7 +1372,7 @@ def run_backtest_unified(payload: Dict = Body(...)):
 
         if mode in ("quick", "both"):
             ex = ThreadPoolExecutor(max_workers=1)
-            fut = ex.submit(backtest_service.run_sma_crossover, symbol, timeframe, fast, slow, starting_capital, fee_rate)
+            fut = ex.submit(backtest_service.run_config_simulation, symbol, main_cfg, starting_capital, fee_rate)
             try:
                 quick_raw = fut.result(timeout=quick_timeout_sec)
                 results.append(backtest_service.to_unified_quick(symbol, quick_raw))
