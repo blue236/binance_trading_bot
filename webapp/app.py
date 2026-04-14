@@ -1031,10 +1031,12 @@ def _chart_runtime_params() -> dict:
     general = (main_cfg.get("general") or {}) if isinstance(main_cfg, dict) else {}
 
     timeframe = str(general.get("timeframe_signal") or web_cfg.timeframe)
+    timeframe_regime = str(general.get("timeframe_regime") or "1d")
     symbols = list(general.get("symbols") or web_cfg.symbols)
     history_limit = int(web_cfg.history_limit)
     return {
         "timeframe": timeframe,
+        "timeframe_regime": timeframe_regime,
         "symbols": symbols,
         "history_limit": history_limit,
     }
@@ -1168,19 +1170,31 @@ def refresh_charts(req: RefreshRequest = Body(default=RefreshRequest())):
     refresh_limit = max(int(runtime["history_limit"]) + slow + 5, int(runtime["history_limit"]))
 
     targets = req.symbols or runtime["symbols"]
+    # Timeframes to fetch: always include signal TF; also fetch the regime TF when
+    # it differs so the quick backtest has the data it needs without a separate call.
+    timeframes_to_fetch: list[str] = [runtime["timeframe"]]
+    regime_tf = runtime["timeframe_regime"]
+    if regime_tf and regime_tf != runtime["timeframe"]:
+        timeframes_to_fetch.append(regime_tf)
+
     refreshed: list[str] = []
     errors: dict[str, str] = {}
 
     for sym in targets:
-        try:
-            with ThreadPoolExecutor(max_workers=1) as ex:
-                fut = ex.submit(chart_service.refresh_symbol, sym, runtime["timeframe"], refresh_limit)
-                fut.result(timeout=20)
+        sym_ok = True
+        for tf in timeframes_to_fetch:
+            try:
+                with ThreadPoolExecutor(max_workers=1) as ex:
+                    fut = ex.submit(chart_service.refresh_symbol, sym, tf, refresh_limit)
+                    fut.result(timeout=20)
+            except FuturesTimeoutError:
+                errors[f"{sym}@{tf}"] = "timeout while fetching OHLCV"
+                sym_ok = False
+            except Exception as e:
+                errors[f"{sym}@{tf}"] = str(e)
+                sym_ok = False
+        if sym_ok:
             refreshed.append(sym)
-        except FuturesTimeoutError:
-            errors[sym] = "timeout while fetching OHLCV"
-        except Exception as e:
-            errors[sym] = str(e)
 
     storage.set_meta("last_chart_refresh", dt.datetime.utcnow().isoformat(timespec="seconds"))
 
