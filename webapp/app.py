@@ -836,7 +836,16 @@ def startup():
     except Exception:
         pass
     # Telegram command polling (server-level fallback, useful when AI bot is down)
-    scheduler.add_job(_poll_server_telegram_commands, "interval", seconds=5, id="telegram_command_poll", replace_existing=True, max_instances=1, coalesce=True)
+    scheduler.add_job(
+        _poll_server_telegram_commands,
+        "interval",
+        seconds=5,
+        id="telegram_command_poll",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=30,
+    )
     scheduler.start()
 
     # Initialize command offset once to avoid replaying old chat history.
