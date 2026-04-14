@@ -875,7 +875,12 @@ def login_submit(request: Request):
     username = (request.headers.get("x-btb-user") or "").strip()
     password = request.headers.get("x-btb-pass") or ""
 
-    if username != _auth_user() or password != _auth_pass() or not _auth_pass():
+    if not _auth_pass():
+        return JSONResponse(
+            {"ok": False, "error": "Server not configured: set BTB_WEB_PASSWORD environment variable"},
+            status_code=503,
+        )
+    if username != _auth_user() or password != _auth_pass():
         return JSONResponse({"ok": False, "error": "Invalid credentials"}, status_code=401)
 
     resp = JSONResponse({"ok": True, "redirect": "/"})
