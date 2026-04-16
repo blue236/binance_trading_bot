@@ -1184,8 +1184,13 @@ def _record_risk_gate_reject(cfg, csv_dir, loop_ts, symbol, reason, logger=None)
 def daily_pnl_guard(cfg, equity_now, equity_start):
     if equity_start <= 0:
         return False
+    # REV-05: use .get() so a missing key disables the guard rather than raising
+    # KeyError, and handle None (null in YAML) gracefully.
+    stop_pct = cfg.get("risk", {}).get("daily_loss_stop_pct")
+    if stop_pct is None:
+        return False
     dd = (equity_now - equity_start) / equity_start * 100.0
-    return dd <= -abs(cfg["risk"]["daily_loss_stop_pct"])
+    return dd <= -abs(float(stop_pct))
 
 def place_order(exchange, symbol, side, qty, price=None, dry_run=True):
     if dry_run:
@@ -1411,7 +1416,7 @@ def main():
                 if pos["signal"] == "T_LONG" and "trail_mult" in pos:
                     df = fetch_ohlc(exchange, sym, cfg["general"]["timeframe_signal"], 200, cfg=cfg, logger=logger)
                     atr = AverageTrueRange(df["h"], df["l"], df["c"], cfg["strategy"]["atr_len"]).average_true_range().iloc[-1]
-                    hi_since = df["c"].iloc[-200:].max()
+                    hi_since = df["h"].iloc[-200:].max()  # REV-05: anchor to period high, not close
                     trail = hi_since - pos["trail_mult"] * atr
                     if trail > sl:
                         sl = trail; pos["sl"] = float(sl); changed = True
