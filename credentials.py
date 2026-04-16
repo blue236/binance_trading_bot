@@ -59,7 +59,8 @@ def _passphrase() -> str | None:
 
 
 def _fernet_from_passphrase(passphrase: str, salt: bytes) -> Fernet:
-    kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=salt, iterations=390000)
+    # REV-04: 600,000 iterations per OWASP 2024 PBKDF2-HMAC-SHA256 recommendation.
+    kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=salt, iterations=600000)
     key = base64.urlsafe_b64encode(kdf.derive(passphrase.encode("utf-8")))
     return Fernet(key)
 
@@ -129,9 +130,11 @@ def load_credentials(path=None) -> Dict[str, str]:
     if data is None:
         plain_path = _resolve_plain_path(path)
         if os.path.exists(plain_path):
-            # DEV-03: Warn visibly when falling back to plaintext credentials.
-            # These files should be migrated to the encrypted store.
-            _logging.getLogger("bot").warning(
+            # DEV-03 / REV-04: Use root logger so the warning is guaranteed visible
+            # at startup (before setup_logger() configures the "bot" logger).
+            # Python's lastResort handler writes WARNING+ to stderr when no other
+            # handlers are configured, so this will always appear on the console.
+            _logging.warning(
                 "Loading credentials from plaintext file '%s'. "
                 "Migrate to encrypted storage: set BTB_CREDENTIALS_PASSPHRASE "
                 "and run `python credentials.py` to re-encrypt.",
