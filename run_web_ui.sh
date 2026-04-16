@@ -1,7 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-python3 -m venv .venv
+# Prefer python3.12 — pinned dependencies (pandas 2.2.2, numpy 1.26.4) require
+# Python <=3.12 and have no pre-built wheels for Python 3.13+.
+if command -v python3.12 &>/dev/null; then
+  PYTHON=python3.12
+elif python3 --version 2>&1 | grep -qE '^Python 3\.(9|10|11|12)\.'; then
+  PYTHON=python3
+else
+  echo "ERROR: Python 3.9–3.12 is required. Found: $(python3 --version 2>&1)" >&2
+  exit 1
+fi
+
+"$PYTHON" -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip setuptools wheel
 pip install -r requirements.txt

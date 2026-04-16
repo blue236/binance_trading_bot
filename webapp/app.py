@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
 import os
 import re
 import signal
@@ -80,17 +82,41 @@ def _session_cookie_name() -> str:
 
 
 def _make_session_token(username: str) -> str:
-    import hmac, hashlib
-    msg = f"{username}:ok".encode("utf-8")
+    # DEV-02: Token includes timestamp + nonce so it expires and cannot be replayed.
+    ts = int(time.time())
+    nonce = secrets.token_hex(8)
+    msg = f"{username}:{ts}:{nonce}:ok".encode("utf-8")
     sig = hmac.new(_session_secret().encode("utf-8"), msg, hashlib.sha256).hexdigest()
-    return f"{username}:{sig}"
+    return f"{username}:{ts}:{nonce}:{sig}"
+
+
+def _session_ttl_seconds() -> int:
+    try:
+        # Floor at 1 hour — zero or negative values would immediately expire all
+        # tokens and silently lock every user out with no error message.
+        val = max(int(os.environ.get("BTB_WEB_SESSION_TTL_HOURS", "8")), 1)
+        return val * 3600
+    except ValueError:
+        return 8 * 3600
 
 
 def _is_valid_session(token: str | None) -> bool:
-    if not token or ":" not in token:
+    # DEV-02: Validate HMAC, expiry, and username match.
+    if not token:
         return False
-    username, sig = token.split(":", 1)
-    return token == _make_session_token(username) and username == _auth_user()
+    parts = token.split(":", 3)
+    if len(parts) != 4:
+        return False
+    username, ts_str, nonce, sig = parts
+    try:
+        token_age = int(time.time()) - int(ts_str)
+    except ValueError:
+        return False
+    if token_age > _session_ttl_seconds() or token_age < 0:
+        return False
+    msg = f"{username}:{ts_str}:{nonce}:ok".encode("utf-8")
+    expected = hmac.new(_session_secret().encode("utf-8"), msg, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(sig, expected) and username == _auth_user()
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
@@ -266,14 +292,25 @@ def _load_ai_config_text() -> str:
 
 def _save_ai_config_text(raw: str) -> None:
     data = yaml.safe_load(raw) or {}
-    # Prevent accidental secret persistence in config.yaml.
+    # DEV-04: Blank secrets in memory BEFORE writing to disk so they never
+    # appear in the on-disk file, even for an instant.
     data.setdefault("credentials", {})
     data["credentials"]["api_key"] = ""
     data["credentials"]["api_secret"] = ""
     data.setdefault("alerts", {})
     data["alerts"]["telegram_bot_token"] = ""
     data["alerts"]["telegram_chat_id"] = ""
-    AI_CONFIG_PATH.write_text(yaml.safe_dump(data, sort_keys=False))
+    # Atomic write via a temp file + os.replace() so a concurrent read of
+    # config.yaml always sees either the old complete file or the new complete
+    # file — never a partial write.
+    # Use os.open() with mode 0o600 so the temp file is never world-readable,
+    # even for the brief window before replace().
+    tmp_path = AI_CONFIG_PATH.with_name(AI_CONFIG_PATH.name + ".tmp")
+    content = yaml.safe_dump(data, sort_keys=False)
+    fd = os.open(str(tmp_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        fh.write(content)
+    tmp_path.replace(AI_CONFIG_PATH)
 
 
 def _apply_ai_config_runtime_reload() -> dict:
@@ -829,6 +866,24 @@ def _run_legacy_backtest(values: Dict, timeout_sec: int = 120):
 @app.on_event("startup")
 def startup():
     global scheduler
+    # DEV-01: Fail fast if auth is enabled but no password is configured.
+    # An empty password would allow anyone to log in, so we refuse to start.
+    if _auth_enabled() and not _auth_pass():
+        raise RuntimeError(
+            "BTB_WEB_PASSWORD must be set when authentication is enabled. "
+            "Set it in your .env file or as an environment variable, then restart. "
+            "To disable auth entirely, set BTB_WEB_AUTH_ENABLED=0."
+        )
+    # Warn loudly when the session secret is the well-known default. Anyone who
+    # reads this source file can forge valid HMAC session tokens if this is kept.
+    if _auth_enabled() and _session_secret() == "change-me":
+        import warnings
+        warnings.warn(
+            "BTB_WEB_SESSION_SECRET is set to the insecure default 'change-me'. "
+            "Set it to a random secret (e.g. python -c \"import secrets; print(secrets.token_hex(32))\") "
+            "in your .env file before exposing this server to any network.",
+            stacklevel=1,
+        )
     cfg = config_mgr.load()
     scheduler = BackgroundScheduler()
     try:
@@ -836,7 +891,16 @@ def startup():
     except Exception:
         pass
     # Telegram command polling (server-level fallback, useful when AI bot is down)
-    scheduler.add_job(_poll_server_telegram_commands, "interval", seconds=5, id="telegram_command_poll", replace_existing=True, max_instances=1, coalesce=True)
+    scheduler.add_job(
+        _poll_server_telegram_commands,
+        "interval",
+        seconds=5,
+        id="telegram_command_poll",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=30,
+    )
     scheduler.start()
 
     # Initialize command offset once to avoid replaying old chat history.
@@ -875,12 +939,19 @@ def login_submit(request: Request):
     username = (request.headers.get("x-btb-user") or "").strip()
     password = request.headers.get("x-btb-pass") or ""
 
-    if username != _auth_user() or password != _auth_pass() or not _auth_pass():
+    if not _auth_pass():
+        return JSONResponse(
+            {"ok": False, "error": "Server not configured: set BTB_WEB_PASSWORD environment variable"},
+            status_code=503,
+        )
+    if username != _auth_user() or password != _auth_pass():
         return JSONResponse({"ok": False, "error": "Invalid credentials"}, status_code=401)
 
     resp = JSONResponse({"ok": True, "redirect": "/"})
     secure_cookie = os.environ.get("BTB_WEB_COOKIE_SECURE", "1").strip() not in ("0", "false", "False")
-    resp.set_cookie(_session_cookie_name(), _make_session_token(username), httponly=True, samesite="lax", secure=secure_cookie, max_age=60 * 60 * 12)
+    # max_age matches the HMAC TTL so the browser cookie expires when the
+    # server-side signature does — avoids a 4-hour redirect loop at TTL boundary.
+    resp.set_cookie(_session_cookie_name(), _make_session_token(username), httponly=True, samesite="lax", secure=secure_cookie, max_age=_session_ttl_seconds())
     return resp
 
 
@@ -1017,10 +1088,12 @@ def _chart_runtime_params() -> dict:
     general = (main_cfg.get("general") or {}) if isinstance(main_cfg, dict) else {}
 
     timeframe = str(general.get("timeframe_signal") or web_cfg.timeframe)
+    timeframe_regime = str(general.get("timeframe_regime") or "1d")
     symbols = list(general.get("symbols") or web_cfg.symbols)
     history_limit = int(web_cfg.history_limit)
     return {
         "timeframe": timeframe,
+        "timeframe_regime": timeframe_regime,
         "symbols": symbols,
         "history_limit": history_limit,
     }
@@ -1154,19 +1227,31 @@ def refresh_charts(req: RefreshRequest = Body(default=RefreshRequest())):
     refresh_limit = max(int(runtime["history_limit"]) + slow + 5, int(runtime["history_limit"]))
 
     targets = req.symbols or runtime["symbols"]
+    # Timeframes to fetch: always include signal TF; also fetch the regime TF when
+    # it differs so the quick backtest has the data it needs without a separate call.
+    timeframes_to_fetch: list[str] = [runtime["timeframe"]]
+    regime_tf = runtime["timeframe_regime"]
+    if regime_tf and regime_tf != runtime["timeframe"]:
+        timeframes_to_fetch.append(regime_tf)
+
     refreshed: list[str] = []
     errors: dict[str, str] = {}
 
     for sym in targets:
-        try:
-            with ThreadPoolExecutor(max_workers=1) as ex:
-                fut = ex.submit(chart_service.refresh_symbol, sym, runtime["timeframe"], refresh_limit)
-                fut.result(timeout=20)
+        sym_ok = True
+        for tf in timeframes_to_fetch:
+            try:
+                with ThreadPoolExecutor(max_workers=1) as ex:
+                    fut = ex.submit(chart_service.refresh_symbol, sym, tf, refresh_limit)
+                    fut.result(timeout=20)
+            except FuturesTimeoutError:
+                errors[f"{sym}@{tf}"] = "timeout while fetching OHLCV"
+                sym_ok = False
+            except Exception as e:
+                errors[f"{sym}@{tf}"] = str(e)
+                sym_ok = False
+        if sym_ok:
             refreshed.append(sym)
-        except FuturesTimeoutError:
-            errors[sym] = "timeout while fetching OHLCV"
-        except Exception as e:
-            errors[sym] = str(e)
 
     storage.set_meta("last_chart_refresh", dt.datetime.utcnow().isoformat(timespec="seconds"))
 

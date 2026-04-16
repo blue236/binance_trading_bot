@@ -1,0 +1,65 @@
+...................................                                      [100%]
+=============================== warnings summary ===============================
+  /home/blue236/projects/binance_trading_bot/.venv/lib/python3.12/site-packages/starlette/formparsers.py:12: PendingDeprecationWarning: Please use `import python_multipart` instead.
+    import multipart
+
+webapp/app.py:858
+  /home/blue236/projects/binance_trading_bot/webapp/app.py:858: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    @app.on_event("startup")
+
+  /home/blue236/projects/binance_trading_bot/.venv/lib/python3.12/site-packages/fastapi/applications.py:4495: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    return self.router.on_event(event_type)
+
+webapp/app.py:901
+  /home/blue236/projects/binance_trading_bot/webapp/app.py:901: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    @app.on_event("shutdown")
+
+tests/test_chart_api_features.py: 120 warnings
+  /home/blue236/projects/binance_trading_bot/webapp/app.py:1144: DeprecationWarning: datetime.datetime.utcfromtimestamp() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.fromtimestamp(timestamp, datetime.UTC).
+    labels_all = [dt.datetime.utcfromtimestamp(int(ts) / 1000).strftime("%Y-%m-%d %H:%M") for ts, *_ in rows]
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+================================ tests coverage ================================
+_______________ coverage: platform linux, python 3.12.3-final-0 ________________
+
+Name                                         Stmts   Miss  Cover   Missing
+--------------------------------------------------------------------------
+backtester.py                                  395    395     0%   28-1021
+credentials.py                                 103     78    24%   27-32, 36-40, 44, 48-53, 58, 62-64, 68-92, 96-115, 127-147, 155-158, 166-177, 181-182
+main.py                                       1064    878    17%   21-22, 25-35, 43-75, 83-88, 91-105, 108-113, 116-119, 122, 151-154, 157-160, 163-171, 175-183, 186-210, 213-237, 241-244, 257-280, 284-289, 299-324, 327-334, 338-343, 347-352, 356, 360-383, 388-423, 427-433, 444-445, 466, 470-474, 478-483, 490-811, 815-819, 822-832, 866-880, 942-989, 1018, 1021, 1033-1040, 1051-1065, 1068, 1071-1073, 1079-1082, 1085-1090, 1093-1094, 1103-1107, 1110, 1113, 1120-1140, 1144-1145, 1155-1167, 1171-1181, 1185-1188, 1191-1200, 1203-1217, 1220-1526, 1529-1535
+telegram_shared.py                              82     16    80%   35-36, 49, 52-53, 70, 78-79, 83-85, 89-91, 95-96
+tests/test_ai_config_reload.py                  52      1    98%   80
+tests/test_ai_start_stop_idempotency.py         70      1    99%   113
+tests/test_backtest_unified_reliability.py      42      2    95%   51, 71
+tests/test_chart_api_features.py                38      1    97%   50
+tests/test_hv5_config_defaults.py               21      1    95%   31
+tests/test_hv5_strategy_adoption.py             80      1    99%   164
+tests/test_logging_and_ai_log_stream.py         58      2    97%   25, 84
+tests/test_telegram_dispatch.py                 32      1    97%   89
+tests/test_telegram_summary.py                  43      2    95%   9, 98
+web_backtester_ui.py                           143    103    28%   58-67, 71-140, 146, 148, 150, 184-185, 189-190, 195-748, 753-758, 761-791, 794-804, 807-814, 818-827, 831-849, 853
+webapp/__init__.py                               0      0   100%
+webapp/app.py                                 1018    615    40%   63, 67, 71, 75, 79, 84-89, 93-96, 101-116, 121-135, 142-143, 147-154, 158-166, 170-181, 185-190, 220-225, 235-263, 272-287, 321, 325, 331-335, 339, 343-349, 353-354, 363-375, 379-388, 396-402, 410, 414-416, 430, 435-436, 445, 450, 460-461, 471-473, 475-477, 481, 484-604, 611-618, 622-650, 659-661, 665-670, 674-681, 685-686, 690-692, 696, 700-708, 720-754, 765-769, 781, 786-787, 792-797, 801, 805-849, 863-898, 904-906, 911-913, 918-935, 940-942, 947-951, 969, 974-976, 981-982, 987-989, 995-1005, 1010, 1024, 1050, 1053-1061, 1090-1091, 1096, 1102, 1115, 1123, 1172-1177, 1205-1238, 1249-1271, 1283-1284, 1308-1310, 1329-1331, 1341-1344, 1349, 1354, 1364-1365, 1372, 1378-1381, 1386, 1391-1395, 1400-1411, 1420, 1443, 1473-1475, 1478, 1486-1487, 1496-1499, 1504-1513, 1518
+webapp/backtest_service.py                     247    211    15%   26-85, 98-264, 276-282, 285-288, 291-294, 297-316, 340-360, 365, 369-372, 377, 381-384
+webapp/chart_service.py                         23     11    52%   17-19, 22-25, 28-31
+webapp/config_manager.py                        16      7    56%   14-19, 22
+webapp/models.py                                54      0   100%
+webapp/storage.py                               29     10    66%   39-40, 51-62, 65-66, 69-71
+--------------------------------------------------------------------------
+TOTAL                                         3610   2336    35%
+35 passed, 125 warnings in 7.86s

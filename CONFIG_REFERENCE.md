@@ -13,7 +13,8 @@ Runtime load order in [`main.py`](/home/blue236/.openclaw/workspace/binance_trad
    - `BINANCE_API_SECRET`
    - `TELEGRAM_BOT_TOKEN`
    - `TELEGRAM_CHAT_ID`
-4. If both `general.dry_run: true` and `general.aggressive_mode: true`, the `aggressive` section is deep-merged into the main config.
+4. `validate_config()` runs immediately after load: raises `ValueError` on invalid risk parameters (negative `daily_loss_stop_pct`, non-positive `per_trade_risk_pct`) and emits warnings for dangerously large values (>10% daily stop, >5% per-trade risk).
+5. If both `general.dry_run: true` and `general.aggressive_mode: true`, the `aggressive` section is deep-merged into the main config.
 
 Important:
 
@@ -448,19 +449,15 @@ Current value:
 
 - `12`
 
-### `aggressive.loop_sleep_seconds`
+### `aggressive.strategy.loop_sleep_seconds`
 
-Intended aggressive-mode loop delay.
+Delay between main trading loop iterations in aggressive dry-run mode.
 
 Current value:
 
 - `60`
 
-Important:
-
-- This key is currently placed at `aggressive.loop_sleep_seconds`, not `aggressive.strategy.loop_sleep_seconds`.
-- The runtime sleep value is read from `cfg["strategy"]["loop_sleep_seconds"]`.
-- Because of that, this aggressive override is currently not used by the trading loop.
+Note: This key was previously misplaced at `aggressive.loop_sleep_seconds` (DEV-08 fix). It is now correctly nested under `aggressive.strategy` so the deep-merge produces `cfg["strategy"]["loop_sleep_seconds"]` as the runtime reads it.
 
 ## `alerts`
 
@@ -628,5 +625,5 @@ If you change only a few values regularly, these are the highest-impact ones:
 These are worth keeping in mind when editing `config.yaml`:
 
 1. Runtime expects `general.min_notional_usdc`, but the template and GUI still use `min_notional_usdt`.
-2. `aggressive.loop_sleep_seconds` is currently not applied because the runtime reads `strategy.loop_sleep_seconds`.
+2. `aggressive.strategy.loop_sleep_seconds` is the correct path for the loop-sleep override (moved from the incorrect `aggressive.loop_sleep_seconds` in DEV-08).
 3. Aggressive overrides only activate when both `dry_run=true` and `aggressive_mode=true`.

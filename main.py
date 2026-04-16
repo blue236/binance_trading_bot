@@ -34,11 +34,57 @@ def apply_credentials(cfg, creds):
         cfg["alerts"]["telegram_chat_id"] = creds.get("telegram_chat_id", "")
     return cfg
 
+def validate_config(cfg):
+    """DEV-05: Fail fast on known misconfiguration patterns that cause silent misbehaviour.
+
+    Called immediately after loading config so problems surface at startup
+    rather than during a live trade.
+    """
+    logger = logging.getLogger("bot")
+    risk = cfg.get("risk", {})
+
+    daily_stop = risk.get("daily_loss_stop_pct")
+    if daily_stop is not None:
+        try:
+            daily_stop = float(daily_stop)
+        except (TypeError, ValueError):
+            raise ValueError(f"risk.daily_loss_stop_pct must be a number, got: {daily_stop!r}")
+        if daily_stop < 0:
+            raise ValueError(
+                f"risk.daily_loss_stop_pct must be a positive number (e.g. 2.0 means 2% stop). "
+                f"Got {daily_stop}. Remove the leading minus sign."
+            )
+        if daily_stop > 10.0:
+            logger.warning(
+                "risk.daily_loss_stop_pct=%.1f is unusually high (>10%%). "
+                "Verify this is intentional.",
+                daily_stop,
+            )
+
+    per_trade = risk.get("per_trade_risk_pct")
+    if per_trade is not None:
+        try:
+            per_trade = float(per_trade)
+        except (TypeError, ValueError):
+            raise ValueError(f"risk.per_trade_risk_pct must be a number, got: {per_trade!r}")
+        if per_trade <= 0:
+            raise ValueError(
+                f"risk.per_trade_risk_pct must be greater than 0. Got {per_trade}."
+            )
+        if per_trade > 5.0:
+            logger.warning(
+                "risk.per_trade_risk_pct=%.2f is very high (>5%%). "
+                "This risks large losses per trade.",
+                per_trade,
+            )
+
+
 def load_config(path="config.yaml"):
     with open(path, "r") as f:
         cfg = yaml.safe_load(f) or {}
     creds = load_or_prompt_credentials()
     cfg = apply_credentials(cfg, creds)
+    validate_config(cfg)
     return cfg
 
 def apply_env_overrides(cfg):
@@ -1173,6 +1219,10 @@ def finalize_exit(cfg, state, state_path, csv_dir, tg, sym, reason, price, qty):
 def main():
     cfg = apply_env_overrides(load_config())
     cfg = apply_aggressive_overrides(cfg)
+    # Re-validate after aggressive overrides so invalid risk values in the
+    # aggressive: block are caught (validate_config in load_config only sees
+    # the base config before the deep-merge).
+    validate_config(cfg)
     tzname = cfg["logging"]["tz"]
     csv_dir = cfg["logging"]["csv_dir"]
     state_path = cfg["logging"]["state_file"]
