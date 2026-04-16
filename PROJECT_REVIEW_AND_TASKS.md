@@ -156,7 +156,7 @@ Tasks are ordered by priority within each agent's domain. Each task has an ID, a
 
 ### AGENT: `btb-developer`
 
-#### TASK DEV-01 — Fix empty-password server startup
+#### TASK DEV-01 — Fix empty-password server startup ✅ COMPLETED
 **Priority:** CRITICAL  
 **Files:** `webapp/app.py`
 
@@ -174,7 +174,7 @@ The server starts and accepts login with a blank password if `BTB_WEB_PASSWORD` 
 
 ---
 
-#### TASK DEV-02 — Harden session token (add expiry + nonce)
+#### TASK DEV-02 — Harden session token (add expiry + nonce) ✅ COMPLETED
 **Priority:** HIGH  
 **Files:** `webapp/app.py`
 
@@ -193,7 +193,7 @@ Current session token is a deterministic HMAC of `username:ok`. No expiry, no no
 
 ---
 
-#### TASK DEV-03 — Fix credential silent fallback
+#### TASK DEV-03 — Fix credential silent fallback ✅ COMPLETED
 **Priority:** HIGH  
 **Files:** `credentials.py`
 
@@ -211,7 +211,7 @@ If `.credentials.enc.json` exists but `BTB_CREDENTIALS_PASSPHRASE` is not set, t
 
 ---
 
-#### TASK DEV-04 — Fix config persistence race in webapp (atomic save)
+#### TASK DEV-04 — Fix config persistence race in webapp (atomic save) ✅ COMPLETED
 **Priority:** HIGH  
 **Files:** `webapp/app.py`
 
@@ -228,7 +228,7 @@ If `.credentials.enc.json` exists but `BTB_CREDENTIALS_PASSPHRASE` is not set, t
 
 ---
 
-#### TASK DEV-05 — Fix `daily_pnl_guard()` sign validation
+#### TASK DEV-05 — Fix `daily_pnl_guard()` sign validation ✅ COMPLETED
 **Priority:** HIGH  
 **Files:** `main.py`
 
@@ -282,7 +282,7 @@ When chart refresh runs for multiple symbols and one times out, the SQLite DB en
 
 ---
 
-#### TASK DEV-08 — Misplaced aggressive override key: `loop_sleep_seconds`
+#### TASK DEV-08 — Misplaced aggressive override key: `loop_sleep_seconds` ✅ COMPLETED
 **Priority:** LOW  
 **Files:** `config.yaml`, `CONFIG_REFERENCE.md`
 
@@ -319,7 +319,7 @@ After DEV-01 and DEV-02 are implemented, perform a complete security review of t
 
 ---
 
-#### TASK REV-02 — Review H_V5 signal logic for lookahead bias
+#### TASK REV-02 — Review H_V5 signal logic for lookahead bias ✅ COMPLETED (WARN — no lookahead confirmed; see reviews/REV-02_REV-04_report.md)
 **Priority:** HIGH  
 **Files:** `main.py` lines 788–957
 
@@ -356,7 +356,7 @@ B-01 identified that `label_future_returns()` uses `df["close"].shift(-holding_p
 
 ---
 
-#### TASK REV-04 — Review credential loading fallback chain
+#### TASK REV-04 — Review credential loading fallback chain ✅ COMPLETED (WARN → resolved; see reviews/REV-02_REV-04_report.md)
 **Priority:** HIGH  
 **Files:** `credentials.py`
 
@@ -392,7 +392,7 @@ Review the risk management math for correctness.
 
 ### AGENT: `btb-tester`
 
-#### TASK TEST-01 — Add edge-case tests for `h1_signals()`
+#### TASK TEST-01 — Add edge-case tests for `h1_signals()` ✅ COMPLETED (5 new tests added; 8 total passing)
 **Priority:** HIGH  
 **Files:** `tests/test_hv5_strategy_adoption.py`
 
@@ -592,7 +592,7 @@ def test_confirm_wrong_token_rejected(self):
 
 ---
 
-#### TASK TEST-07 — Measure and report current coverage
+#### TASK TEST-07 — Measure and report current coverage ✅ COMPLETED (35% overall; see coverage_report.txt)
 **Priority:** MEDIUM  
 **Deliverable:** Coverage report
 

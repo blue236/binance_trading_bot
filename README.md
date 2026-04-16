@@ -72,9 +72,9 @@ Core fields:
 
 Secrets are no longer stored in plaintext config files.
 
-- `config.yaml` editor masks and strips secret fields on save.
-- Web secrets manager stores encrypted credentials in `.credentials.enc.json`.
-- Set `BTB_CREDENTIALS_PASSPHRASE` before saving secrets.
+- `config.yaml` editor masks and strips secret fields on save (atomic write via temp file + `os.replace()`).
+- Web secrets manager stores encrypted credentials in `.credentials.enc.json` using Fernet/PBKDF2-HMAC-SHA256 (600,000 iterations per OWASP 2024).
+- **`BTB_CREDENTIALS_PASSPHRASE` is mandatory** when `.credentials.enc.json` exists. The bot fails at startup with a clear error rather than silently starting with empty credentials.
 
 Example:
 
@@ -84,6 +84,19 @@ export BTB_CREDENTIALS_PASSPHRASE='use-a-long-random-passphrase'
 ```
 
 Environment variables (`BINANCE_API_KEY`, `BINANCE_API_SECRET`, etc.) still override stored values.
+
+## Web UI authentication
+
+**`BTB_WEB_PASSWORD` is required** when authentication is enabled (the default). The server refuses to start if it is unset.
+
+Session tokens are HMAC-SHA256 signed with `BTB_WEB_SESSION_SECRET` and expire after `BTB_WEB_SESSION_TTL_HOURS` (default 8 h).
+
+```bash
+export BTB_WEB_PASSWORD='your-strong-password'
+export BTB_WEB_SESSION_SECRET='random-32+-char-secret'   # auto-generated if omitted
+export BTB_WEB_SESSION_TTL_HOURS=8                        # optional, default 8
+./run_web_ui.sh
+```
 
 ## Operational docs
 
