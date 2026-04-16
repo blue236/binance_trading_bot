@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
 import os
 import re
 import signal
@@ -81,7 +83,6 @@ def _session_cookie_name() -> str:
 
 def _make_session_token(username: str) -> str:
     # DEV-02: Token includes timestamp + nonce so it expires and cannot be replayed.
-    import hmac, hashlib
     ts = int(time.time())
     nonce = secrets.token_hex(8)
     msg = f"{username}:{ts}:{nonce}:ok".encode("utf-8")
@@ -91,7 +92,10 @@ def _make_session_token(username: str) -> str:
 
 def _session_ttl_seconds() -> int:
     try:
-        return int(os.environ.get("BTB_WEB_SESSION_TTL_HOURS", "8")) * 3600
+        # Floor at 1 hour — zero or negative values would immediately expire all
+        # tokens and silently lock every user out with no error message.
+        val = max(int(os.environ.get("BTB_WEB_SESSION_TTL_HOURS", "8")), 1)
+        return val * 3600
     except ValueError:
         return 8 * 3600
 
@@ -110,10 +114,9 @@ def _is_valid_session(token: str | None) -> bool:
         return False
     if token_age > _session_ttl_seconds() or token_age < 0:
         return False
-    import hmac as _hmac, hashlib
     msg = f"{username}:{ts_str}:{nonce}:ok".encode("utf-8")
-    expected = _hmac.new(_session_secret().encode("utf-8"), msg, hashlib.sha256).hexdigest()
-    return _hmac.compare_digest(sig, expected) and username == _auth_user()
+    expected = hmac.new(_session_secret().encode("utf-8"), msg, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(sig, expected) and username == _auth_user()
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
@@ -300,8 +303,13 @@ def _save_ai_config_text(raw: str) -> None:
     # Atomic write via a temp file + os.replace() so a concurrent read of
     # config.yaml always sees either the old complete file or the new complete
     # file — never a partial write.
+    # Use os.open() with mode 0o600 so the temp file is never world-readable,
+    # even for the brief window before replace().
     tmp_path = AI_CONFIG_PATH.with_name(AI_CONFIG_PATH.name + ".tmp")
-    tmp_path.write_text(yaml.safe_dump(data, sort_keys=False))
+    content = yaml.safe_dump(data, sort_keys=False)
+    fd = os.open(str(tmp_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        fh.write(content)
     tmp_path.replace(AI_CONFIG_PATH)
 
 
@@ -866,6 +874,16 @@ def startup():
             "Set it in your .env file or as an environment variable, then restart. "
             "To disable auth entirely, set BTB_WEB_AUTH_ENABLED=0."
         )
+    # Warn loudly when the session secret is the well-known default. Anyone who
+    # reads this source file can forge valid HMAC session tokens if this is kept.
+    if _auth_enabled() and _session_secret() == "change-me":
+        import warnings
+        warnings.warn(
+            "BTB_WEB_SESSION_SECRET is set to the insecure default 'change-me'. "
+            "Set it to a random secret (e.g. python -c \"import secrets; print(secrets.token_hex(32))\") "
+            "in your .env file before exposing this server to any network.",
+            stacklevel=1,
+        )
     cfg = config_mgr.load()
     scheduler = BackgroundScheduler()
     try:
@@ -931,7 +949,9 @@ def login_submit(request: Request):
 
     resp = JSONResponse({"ok": True, "redirect": "/"})
     secure_cookie = os.environ.get("BTB_WEB_COOKIE_SECURE", "1").strip() not in ("0", "false", "False")
-    resp.set_cookie(_session_cookie_name(), _make_session_token(username), httponly=True, samesite="lax", secure=secure_cookie, max_age=60 * 60 * 12)
+    # max_age matches the HMAC TTL so the browser cookie expires when the
+    # server-side signature does — avoids a 4-hour redirect loop at TTL boundary.
+    resp.set_cookie(_session_cookie_name(), _make_session_token(username), httponly=True, samesite="lax", secure=secure_cookie, max_age=_session_ttl_seconds())
     return resp
 
 

@@ -1219,6 +1219,10 @@ def finalize_exit(cfg, state, state_path, csv_dir, tg, sym, reason, price, qty):
 def main():
     cfg = apply_env_overrides(load_config())
     cfg = apply_aggressive_overrides(cfg)
+    # Re-validate after aggressive overrides so invalid risk values in the
+    # aggressive: block are caught (validate_config in load_config only sees
+    # the base config before the deep-merge).
+    validate_config(cfg)
     tzname = cfg["logging"]["tz"]
     csv_dir = cfg["logging"]["csv_dir"]
     state_path = cfg["logging"]["state_file"]

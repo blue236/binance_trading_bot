@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import os
 import getpass
 from typing import Dict
@@ -58,9 +59,11 @@ def _passphrase() -> str | None:
     return (os.getenv("BTB_CREDENTIALS_PASSPHRASE") or "").strip() or None
 
 
-def _fernet_from_passphrase(passphrase: str, salt: bytes) -> Fernet:
-    # REV-04: 600,000 iterations per OWASP 2024 PBKDF2-HMAC-SHA256 recommendation.
-    kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=salt, iterations=600000)
+_DEFAULT_PBKDF2_ITERATIONS = 600000  # OWASP 2024 PBKDF2-HMAC-SHA256 recommendation
+
+
+def _fernet_from_passphrase(passphrase: str, salt: bytes, iterations: int = _DEFAULT_PBKDF2_ITERATIONS) -> Fernet:
+    kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=salt, iterations=iterations)
     key = base64.urlsafe_b64encode(kdf.derive(passphrase.encode("utf-8")))
     return Fernet(key)
 
@@ -80,10 +83,14 @@ def _read_encrypted(path=ENCRYPTED_PATH) -> Dict[str, str] | None:
             "To skip the encrypted store, delete or rename the file."
         )
     try:
-        payload = json.loads(open(path, "r").read())
+        with open(path, "r") as fh:
+            payload = json.loads(fh.read())
         salt = base64.b64decode(payload["salt"])
         token = payload["token"].encode("utf-8")
-        f = _fernet_from_passphrase(pw, salt)
+        # Read stored iteration count so files encrypted with any iteration count
+        # (e.g. the previous default of 390,000) can still be decrypted correctly.
+        iterations = int(payload.get("iter", _DEFAULT_PBKDF2_ITERATIONS))
+        f = _fernet_from_passphrase(pw, salt, iterations)
         raw = f.decrypt(token)
         data = json.loads(raw.decode("utf-8"))
         return {k: str(data.get(k, "")) for k, _ in _FIELDS}
@@ -103,7 +110,7 @@ def _write_encrypted(data: Dict[str, str], path=ENCRYPTED_PATH) -> bool:
     payload = {
         "v": 1,
         "kdf": "PBKDF2-HMAC-SHA256",
-        "iter": 390000,
+        "iter": _DEFAULT_PBKDF2_ITERATIONS,
         "salt": base64.b64encode(salt).decode("utf-8"),
         "token": token.decode("utf-8"),
     }
@@ -125,7 +132,6 @@ def load_credentials(path=None) -> Dict[str, str]:
     3) Empty defaults
     Then env vars override.
     """
-    import logging as _logging
     data = _read_encrypted() or None
     if data is None:
         plain_path = _resolve_plain_path(path)
@@ -134,14 +140,15 @@ def load_credentials(path=None) -> Dict[str, str]:
             # at startup (before setup_logger() configures the "bot" logger).
             # Python's lastResort handler writes WARNING+ to stderr when no other
             # handlers are configured, so this will always appear on the console.
-            _logging.warning(
+            logging.warning(
                 "Loading credentials from plaintext file '%s'. "
                 "Migrate to encrypted storage: set BTB_CREDENTIALS_PASSPHRASE "
                 "and run `python credentials.py` to re-encrypt.",
                 plain_path,
             )
             try:
-                raw = json.load(open(plain_path, "r")) or {}
+                with open(plain_path, "r") as fh:
+                    raw = json.load(fh) or {}
                 data = {k: str(raw.get(k, "")) for k, _ in _FIELDS}
             except Exception:
                 data = _empty()
