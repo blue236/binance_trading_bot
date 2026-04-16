@@ -80,17 +80,40 @@ def _session_cookie_name() -> str:
 
 
 def _make_session_token(username: str) -> str:
+    # DEV-02: Token includes timestamp + nonce so it expires and cannot be replayed.
     import hmac, hashlib
-    msg = f"{username}:ok".encode("utf-8")
+    ts = int(time.time())
+    nonce = secrets.token_hex(8)
+    msg = f"{username}:{ts}:{nonce}:ok".encode("utf-8")
     sig = hmac.new(_session_secret().encode("utf-8"), msg, hashlib.sha256).hexdigest()
-    return f"{username}:{sig}"
+    return f"{username}:{ts}:{nonce}:{sig}"
+
+
+def _session_ttl_seconds() -> int:
+    try:
+        return int(os.environ.get("BTB_WEB_SESSION_TTL_HOURS", "8")) * 3600
+    except ValueError:
+        return 8 * 3600
 
 
 def _is_valid_session(token: str | None) -> bool:
-    if not token or ":" not in token:
+    # DEV-02: Validate HMAC, expiry, and username match.
+    if not token:
         return False
-    username, sig = token.split(":", 1)
-    return token == _make_session_token(username) and username == _auth_user()
+    parts = token.split(":", 3)
+    if len(parts) != 4:
+        return False
+    username, ts_str, nonce, sig = parts
+    try:
+        token_age = int(time.time()) - int(ts_str)
+    except ValueError:
+        return False
+    if token_age > _session_ttl_seconds() or token_age < 0:
+        return False
+    import hmac as _hmac, hashlib
+    msg = f"{username}:{ts_str}:{nonce}:ok".encode("utf-8")
+    expected = _hmac.new(_session_secret().encode("utf-8"), msg, hashlib.sha256).hexdigest()
+    return _hmac.compare_digest(sig, expected) and username == _auth_user()
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
@@ -266,14 +289,20 @@ def _load_ai_config_text() -> str:
 
 def _save_ai_config_text(raw: str) -> None:
     data = yaml.safe_load(raw) or {}
-    # Prevent accidental secret persistence in config.yaml.
+    # DEV-04: Blank secrets in memory BEFORE writing to disk so they never
+    # appear in the on-disk file, even for an instant.
     data.setdefault("credentials", {})
     data["credentials"]["api_key"] = ""
     data["credentials"]["api_secret"] = ""
     data.setdefault("alerts", {})
     data["alerts"]["telegram_bot_token"] = ""
     data["alerts"]["telegram_chat_id"] = ""
-    AI_CONFIG_PATH.write_text(yaml.safe_dump(data, sort_keys=False))
+    # Atomic write via a temp file + os.replace() so a concurrent read of
+    # config.yaml always sees either the old complete file or the new complete
+    # file — never a partial write.
+    tmp_path = AI_CONFIG_PATH.with_name(AI_CONFIG_PATH.name + ".tmp")
+    tmp_path.write_text(yaml.safe_dump(data, sort_keys=False))
+    tmp_path.replace(AI_CONFIG_PATH)
 
 
 def _apply_ai_config_runtime_reload() -> dict:
@@ -829,6 +858,14 @@ def _run_legacy_backtest(values: Dict, timeout_sec: int = 120):
 @app.on_event("startup")
 def startup():
     global scheduler
+    # DEV-01: Fail fast if auth is enabled but no password is configured.
+    # An empty password would allow anyone to log in, so we refuse to start.
+    if _auth_enabled() and not _auth_pass():
+        raise RuntimeError(
+            "BTB_WEB_PASSWORD must be set when authentication is enabled. "
+            "Set it in your .env file or as an environment variable, then restart. "
+            "To disable auth entirely, set BTB_WEB_AUTH_ENABLED=0."
+        )
     cfg = config_mgr.load()
     scheduler = BackgroundScheduler()
     try:

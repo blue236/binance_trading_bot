@@ -69,8 +69,15 @@ def _read_encrypted(path=ENCRYPTED_PATH) -> Dict[str, str] | None:
         return None
     pw = _passphrase()
     if not pw:
-        # encrypted exists but no passphrase available
-        return None
+        # DEV-03: Fail loudly instead of silently returning empty credentials.
+        # A missing passphrase with an existing encrypted file is always a
+        # configuration mistake — the bot would start with no API keys.
+        raise RuntimeError(
+            f"Encrypted credential store '{path}' exists but "
+            "BTB_CREDENTIALS_PASSPHRASE is not set. "
+            "Export the passphrase as an environment variable and retry. "
+            "To skip the encrypted store, delete or rename the file."
+        )
     try:
         payload = json.loads(open(path, "r").read())
         salt = base64.b64decode(payload["salt"])
@@ -79,6 +86,8 @@ def _read_encrypted(path=ENCRYPTED_PATH) -> Dict[str, str] | None:
         raw = f.decrypt(token)
         data = json.loads(raw.decode("utf-8"))
         return {k: str(data.get(k, "")) for k, _ in _FIELDS}
+    except RuntimeError:
+        raise
     except Exception:
         return None
 
@@ -115,10 +124,19 @@ def load_credentials(path=None) -> Dict[str, str]:
     3) Empty defaults
     Then env vars override.
     """
+    import logging as _logging
     data = _read_encrypted() or None
     if data is None:
         plain_path = _resolve_plain_path(path)
         if os.path.exists(plain_path):
+            # DEV-03: Warn visibly when falling back to plaintext credentials.
+            # These files should be migrated to the encrypted store.
+            _logging.getLogger("bot").warning(
+                "Loading credentials from plaintext file '%s'. "
+                "Migrate to encrypted storage: set BTB_CREDENTIALS_PASSPHRASE "
+                "and run `python credentials.py` to re-encrypt.",
+                plain_path,
+            )
             try:
                 raw = json.load(open(plain_path, "r")) or {}
                 data = {k: str(raw.get(k, "")) for k, _ in _FIELDS}

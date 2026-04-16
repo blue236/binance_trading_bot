@@ -79,7 +79,7 @@ aggressive:
     atr_sl_mr_mult: 1.2
     rsi_mr_threshold: 35
     mean_reversion_time_stop_hours: 24
-  loop_sleep_seconds: 60
+    loop_sleep_seconds: 60
 alerts:
   enable_telegram: true
   telegram_bot_token: ''
