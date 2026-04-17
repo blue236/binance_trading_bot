@@ -340,7 +340,7 @@ Perform a focused lookahead audit of the complete signal chain.
 
 ---
 
-#### TASK REV-03 — Review backtester ML lookahead in `backtester.py`
+#### TASK REV-03 — Review backtester ML lookahead in `backtester.py` ✅ COMPLETED (BLOCK — lookahead confirmed; see reviews/REV-03_backtester_lookahead.md)
 **Priority:** HIGH  
 **Files:** `backtester.py` lines 200–323
 
@@ -373,7 +373,7 @@ After DEV-03 is implemented, review the complete credential resolution flow.
 
 ---
 
-#### TASK REV-05 — Review position sizing and risk math
+#### TASK REV-05 — Review position sizing and risk math ✅ COMPLETED (2 bugs fixed; see reviews/REV-05_risk_math.md)
 **Priority:** MEDIUM  
 **Files:** `main.py` — `position_size()`, `order_constraints_ok()`, `daily_pnl_guard()`
 
@@ -431,7 +431,7 @@ def test_h1_signals_regime_none_suppresses_entry(self):
 
 ---
 
-#### TASK TEST-02 — Add tests for `regime_filter()`
+#### TASK TEST-02 — Add tests for `regime_filter()` ✅ COMPLETED (8 tests passing; tests/test_regime_filter.py)
 **Priority:** HIGH  
 **Files:** New file `tests/test_regime_filter.py`
 
@@ -471,7 +471,7 @@ All tests mock `fetch_ohlc()` to avoid exchange calls.
 
 ---
 
-#### TASK TEST-03 — Add tests for config validation and `deep_merge()`
+#### TASK TEST-03 — Add tests for config validation and `deep_merge()` ✅ COMPLETED (28 tests passing; tests/test_config_validation.py)
 **Priority:** HIGH  
 **Files:** `tests/test_hv5_config_defaults.py` (extend) or new `tests/test_config_validation.py`
 
@@ -529,7 +529,7 @@ Use `unittest.mock.patch` for all exchange calls and file I/O. Run against a tem
 
 ---
 
-#### TASK TEST-05 — Add tests for credential loading fallback chain
+#### TASK TEST-05 — Add tests for credential loading fallback chain ✅ COMPLETED (10 tests passing; tests/test_credentials.py)
 **Priority:** HIGH  
 **Files:** New file `tests/test_credentials.py`
 
