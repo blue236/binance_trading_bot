@@ -132,7 +132,7 @@ def load_credentials(path=None) -> Dict[str, str]:
     3) Empty defaults
     Then env vars override.
     """
-    data = _read_encrypted() or None
+    data = _read_encrypted(ENCRYPTED_PATH) or None
     if data is None:
         plain_path = _resolve_plain_path(path)
         if os.path.exists(plain_path):

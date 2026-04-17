@@ -509,7 +509,7 @@ def test_h1_signals_missing_strategy_key_raises(self):
 
 ---
 
-#### TASK TEST-04 — Add integration test for full trade lifecycle
+#### TASK TEST-04 — Add integration test for full trade lifecycle ✅ COMPLETED (16 tests passing; tests/test_trade_lifecycle.py)
 **Priority:** HIGH  
 **Files:** New file `tests/test_trade_lifecycle.py`
 
@@ -561,7 +561,7 @@ def test_missing_all_files_returns_empty(self):
 
 ---
 
-#### TASK TEST-06 — Add tests for approval timeout and user-mismatch
+#### TASK TEST-06 — Add tests for approval timeout and user-mismatch ✅ COMPLETED (5 approval tests passing; tests/test_telegram_dispatch.py)
 **Priority:** MEDIUM  
 **Files:** `tests/test_telegram_dispatch.py` (extend)
 
