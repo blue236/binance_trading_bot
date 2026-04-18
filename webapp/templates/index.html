@@ -216,6 +216,23 @@
   </div>
 
 <script>
+  // DEV-06: Intercept all fetch() calls and inject X-CSRF-Token on state-changing requests.
+  (function() {
+    const _safe = new Set(['GET','HEAD','OPTIONS']);
+    let _token = '';
+    const _ready = fetch('/api/csrf_token').then(r=>r.json()).then(j=>{ _token=j.token||''; }).catch(()=>{});
+    const _orig = window.fetch.bind(window);
+    window.fetch = async function(url, opts) {
+      await _ready;
+      opts = opts ? Object.assign({}, opts) : {};
+      const method = ((opts.method || 'GET') + '').toUpperCase();
+      if (!_safe.has(method) && _token) {
+        opts.headers = Object.assign({'x-csrf-token': _token}, opts.headers || {});
+      }
+      return _orig(url, opts);
+    };
+  })();
+
   const initialConfig = {{ config | tojson }};
   let chart;
   let fsChart;

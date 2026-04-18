@@ -245,7 +245,7 @@ If `.credentials.enc.json` exists but `BTB_CREDENTIALS_PASSPHRASE` is not set, t
 
 ---
 
-#### TASK DEV-06 — Add CSRF token protection to state-changing POST routes
+#### TASK DEV-06 — Add CSRF token protection to state-changing POST routes ✅ COMPLETED
 **Priority:** MEDIUM  
 **Files:** `webapp/app.py`, `webapp/templates/`
 
@@ -264,7 +264,7 @@ No CSRF protection on POST endpoints. A logged-in user visiting a malicious page
 
 ---
 
-#### TASK DEV-07 — Fix chart partial-refresh inconsistency
+#### TASK DEV-07 — Fix chart partial-refresh inconsistency ✅ COMPLETED
 **Priority:** MEDIUM  
 **Files:** `webapp/app.py`, `webapp/chart_service.py`
 
@@ -749,8 +749,8 @@ The H_V5 regime filter (EMA200 + RSI daily) may be filtering out valid entries o
 | 🟠 HIGH | TEST-05 Credential fallback tests | `btb-tester` | 2 hours |
 | 🟠 HIGH | QUANT-02 Fix ML lookahead | `btb-quant` | 3 hours |
 | 🟠 HIGH | QUANT-03 Full H_V5 optimization | `btb-quant` | 4 hours |
-| 🟡 MEDIUM | DEV-06 CSRF protection | `btb-developer` | 4 hours |
-| 🟡 MEDIUM | DEV-07 Chart refresh consistency | `btb-developer` | 3 hours |
+| ✅ DONE | DEV-06 CSRF protection | `btb-developer` | 4 hours |
+| ✅ DONE | DEV-07 Chart refresh consistency | `btb-developer` | 3 hours |
 | 🟡 MEDIUM | REV-05 Risk math review | `btb-reviewer` | 2 hours |
 | 🟡 MEDIUM | TEST-06 Approval flow tests | `btb-tester` | 2 hours |
 | 🟡 MEDIUM | TEST-07 Coverage measurement | `btb-tester` | 1 hour |
