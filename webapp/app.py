@@ -1000,7 +1000,7 @@ def csrf_token(request: Request):
     if not _auth_enabled():
         return {"token": ""}
     session_token = request.cookies.get(_session_cookie_name())
-    if not session_token:
+    if not _is_valid_session(session_token):
         return JSONResponse(status_code=401, content={"ok": False, "error": "not_authenticated"})
     return {"token": _make_csrf_token(session_token)}
 

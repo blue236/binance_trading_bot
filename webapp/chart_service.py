@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import logging
 import ccxt
 
 from .storage import Storage
@@ -32,6 +33,7 @@ class ChartService:
                 statuses[s] = "ok"
             except Exception as exc:
                 statuses[s] = str(exc)
+                logging.warning("chart refresh failed for %s: %s", s, exc)
         self.storage.set_meta("last_chart_refresh", dt.datetime.utcnow().isoformat(timespec="seconds"))
         return statuses
 
