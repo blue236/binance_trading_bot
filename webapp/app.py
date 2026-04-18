@@ -100,6 +100,11 @@ def _session_ttl_seconds() -> int:
         return 8 * 3600
 
 
+def _make_csrf_token(session_token: str) -> str:
+    # DEV-06: Stateless CSRF token derived from the session token — no server-side storage needed.
+    return hmac.new(_session_secret().encode("utf-8"), session_token.encode("utf-8"), hashlib.sha256).hexdigest()[:32]
+
+
 def _is_valid_session(token: str | None) -> bool:
     # DEV-02: Validate HMAC, expiry, and username match.
     if not token:
@@ -138,6 +143,33 @@ class AuthMiddleware(BaseHTTPMiddleware):
         return RedirectResponse(url="/login", status_code=302)
 
 
+class CsrfMiddleware(BaseHTTPMiddleware):
+    # DEV-06: Validate X-CSRF-Token on all state-changing requests when auth is enabled.
+    _SAFE_METHODS = frozenset(("GET", "HEAD", "OPTIONS"))
+
+    async def dispatch(self, request: Request, call_next):
+        if not _auth_enabled():
+            return await call_next(request)
+        if request.method in self._SAFE_METHODS:
+            return await call_next(request)
+        path = request.url.path or "/"
+        if path.startswith("/login"):
+            return await call_next(request)
+
+        session_token = request.cookies.get(_session_cookie_name())
+        if not session_token:
+            return JSONResponse(status_code=403, content={"ok": False, "error": "csrf_missing_session"})
+
+        csrf_header = request.headers.get("x-csrf-token", "")
+        expected = _make_csrf_token(session_token)
+        if not hmac.compare_digest(csrf_header, expected):
+            return JSONResponse(status_code=403, content={"ok": False, "error": "csrf_invalid"})
+
+        return await call_next(request)
+
+
+# CsrfMiddleware is added first so AuthMiddleware wraps it (auth runs before CSRF in request flow).
+app.add_middleware(CsrfMiddleware)
 app.add_middleware(AuthMiddleware)
 
 
@@ -960,6 +992,17 @@ def logout():
     resp = JSONResponse({"ok": True})
     resp.delete_cookie(_session_cookie_name())
     return resp
+
+
+@app.get("/api/csrf_token")
+def csrf_token(request: Request):
+    # DEV-06: Return CSRF token derived from the current session cookie.
+    if not _auth_enabled():
+        return {"token": ""}
+    session_token = request.cookies.get(_session_cookie_name())
+    if not session_token:
+        return JSONResponse(status_code=401, content={"ok": False, "error": "not_authenticated"})
+    return {"token": _make_csrf_token(session_token)}
 
 
 @app.get("/", response_class=HTMLResponse)

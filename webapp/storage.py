@@ -47,6 +47,22 @@ class Storage:
                 [(symbol, timeframe, *r) for r in rows],
             )
 
+    def upsert_ohlcv_and_set_meta(self, symbol: str, timeframe: str, rows: Iterable[tuple[int, float, float, float, float, float]], meta_key: str, meta_value: str):
+        with self._conn() as con:
+            con.executemany(
+                """
+                INSERT INTO ohlcv(symbol,timeframe,ts,open,high,low,close,volume)
+                VALUES(?,?,?,?,?,?,?,?)
+                ON CONFLICT(symbol,timeframe,ts) DO UPDATE SET
+                  open=excluded.open,high=excluded.high,low=excluded.low,close=excluded.close,volume=excluded.volume
+                """,
+                [(symbol, timeframe, *r) for r in rows],
+            )
+            con.execute(
+                "INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (meta_key, meta_value),
+            )
+
     def fetch_ohlcv(self, symbol: str, timeframe: str, limit: int = 500):
         with self._conn() as con:
             cur = con.execute(
