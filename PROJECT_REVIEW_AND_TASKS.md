@@ -301,7 +301,7 @@ When chart refresh runs for multiple symbols and one times out, the SQLite DB en
 
 ### AGENT: `btb-reviewer`
 
-#### TASK REV-01 — Full security audit of auth + session system
+#### TASK REV-01 — Full security audit of auth + session system ✅ COMPLETED
 **Priority:** CRITICAL  
 **Files:** `webapp/app.py` lines 62–115, 875–900
 
@@ -734,7 +734,7 @@ The H_V5 regime filter (EMA200 + RSI daily) may be filtering out valid entries o
 | Priority | Task | Agent | Estimated Effort |
 |----------|------|-------|-----------------|
 | 🔴 CRITICAL | DEV-01 Empty password startup | `btb-developer` | 1 hour |
-| 🔴 CRITICAL | REV-01 Auth security audit | `btb-reviewer` | 2 hours |
+| ✅ DONE | REV-01 Auth security audit | `btb-reviewer` | 2 hours |
 | ✅ DONE | QUANT-01 Port H_V5 to backtester | `btb-quant` | 1–2 days |
 | 🟠 HIGH | DEV-02 Harden session tokens | `btb-developer` | 2 hours |
 | 🟠 HIGH | DEV-03 Credential silent fallback | `btb-developer` | 1 hour |
