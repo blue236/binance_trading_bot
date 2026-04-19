@@ -277,6 +277,10 @@ def compute_regime_column(df_signal: pd.DataFrame, df_daily: pd.DataFrame, p: di
 
     if len(d) < ema_slow_len + 2:
         # Insufficient daily data — fall back to no regime filter (always "trend").
+        print(
+            f"[regime] insufficient daily data ({len(d)} bars < {ema_slow_len + 2} needed),"
+            " regime filter disabled"
+        )
         return pd.Series("trend", index=df_signal.index)
 
     ema200 = EMAIndicator(d["close"], ema_slow_len).ema_indicator()
@@ -365,17 +369,22 @@ def backtest_h_v5(df: pd.DataFrame, p: dict, costs: Costs, capital: float = 10_0
     atr_sl_mult = float(p.get("atr_sl_trend_mult", 2.5))
     trail_mult = float(p.get("atr_trail_mult", 8.0))
     breakeven_r = float(p.get("breakeven_r", 1.0))
+    cooldown_bars = int(p.get("cooldown_bars", 3))
 
     close = df["close"]
     high = df["high"]
     low = df["low"]
 
-    # All indicators shifted by 1 so bar i uses bar i-1 closed values (no lookahead).
+    # don_hi is shifted by 1: at bar i (closed), we use the previous bar's Donchian high.
+    # This matches live h1_signals() which reads don_hi.iloc[-2] (one bar back from the
+    # forming candle = one bar back from the last closed bar in a backtest loop).
+    # ema_fast, ema_mom, atr, rsi are NOT shifted: bar i is already a fully-closed bar,
+    # so arr[i] is the closed-bar value, matching live iloc[-1] reads.
     don_hi = high.rolling(don_period).max().shift(1)
-    ema_fast = EMAIndicator(close, ema_fast_len).ema_indicator().shift(1)
-    ema_mom = EMAIndicator(close, momentum_ema_len).ema_indicator().shift(1)
-    atr = AverageTrueRange(high, low, close, atr_len).average_true_range().shift(1)
-    rsi = RSIIndicator(close, rsi_len).rsi().shift(1)
+    ema_fast = EMAIndicator(close, ema_fast_len).ema_indicator()
+    ema_mom = EMAIndicator(close, momentum_ema_len).ema_indicator()
+    atr = AverageTrueRange(high, low, close, atr_len).average_true_range()
+    rsi = RSIIndicator(close, rsi_len).rsi()
 
     has_regime = "regime" in df.columns
     regime_col = df["regime"] if has_regime else pd.Series("trend", index=df.index)
@@ -388,6 +397,7 @@ def backtest_h_v5(df: pd.DataFrame, p: dict, costs: Costs, capital: float = 10_0
     entry_px = 0.0
     stop_px = 0.0
     init_risk = 0.0
+    cooldown_remaining = 0
     eq: list[float] = []
     pnls: list[float] = []
 
@@ -432,9 +442,14 @@ def backtest_h_v5(df: pd.DataFrame, p: dict, costs: Costs, capital: float = 10_0
                 cash = qty * exit_px
                 pnls.append(cash - entry_cash)
                 qty = 0.0
+                cooldown_remaining = cooldown_bars
+
+        # Decrement cooldown each bar we are out of position.
+        if qty == 0.0 and cooldown_remaining > 0:
+            cooldown_remaining -= 1
 
         # --- Entry logic ---
-        if qty == 0.0 and regime_arr[i] == "trend":
+        if qty == 0.0 and cooldown_remaining == 0 and regime_arr[i] == "trend":
             pb_ema = ema_fast_arr[i]
             mom_ema = ema_mom_arr[i]
             don_prev = don_hi_arr[i]
