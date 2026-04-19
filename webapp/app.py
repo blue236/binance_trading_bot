@@ -157,7 +157,7 @@ class CsrfMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         session_token = request.cookies.get(_session_cookie_name())
-        if not session_token:
+        if not _is_valid_session(session_token):
             return JSONResponse(status_code=403, content={"ok": False, "error": "csrf_missing_session"})
 
         csrf_header = request.headers.get("x-csrf-token", "")
@@ -906,15 +906,13 @@ def startup():
             "Set it in your .env file or as an environment variable, then restart. "
             "To disable auth entirely, set BTB_WEB_AUTH_ENABLED=0."
         )
-    # Warn loudly when the session secret is the well-known default. Anyone who
-    # reads this source file can forge valid HMAC session tokens if this is kept.
+    # REV-01: Block startup with default session secret — anyone who reads this
+    # source file can forge valid HMAC session tokens if "change-me" is kept.
     if _auth_enabled() and _session_secret() == "change-me":
-        import warnings
-        warnings.warn(
-            "BTB_WEB_SESSION_SECRET is set to the insecure default 'change-me'. "
-            "Set it to a random secret (e.g. python -c \"import secrets; print(secrets.token_hex(32))\") "
-            "in your .env file before exposing this server to any network.",
-            stacklevel=1,
+        raise RuntimeError(
+            "BTB_WEB_SESSION_SECRET must not be the default 'change-me'. "
+            "Generate one with: python -c \"import secrets; print(secrets.token_hex(32))\" "
+            "and set it in your .env file before starting the server."
         )
     cfg = config_mgr.load()
     scheduler = BackgroundScheduler()
@@ -976,7 +974,10 @@ def login_submit(request: Request):
             {"ok": False, "error": "Server not configured: set BTB_WEB_PASSWORD environment variable"},
             status_code=503,
         )
-    if username != _auth_user() or password != _auth_pass():
+    # REV-01: Use constant-time comparison to prevent timing oracle on credentials.
+    user_ok = hmac.compare_digest(username.encode(), _auth_user().encode())
+    pass_ok = hmac.compare_digest(password.encode(), _auth_pass().encode())
+    if not (user_ok and pass_ok):
         return JSONResponse({"ok": False, "error": "Invalid credentials"}, status_code=401)
 
     resp = JSONResponse({"ok": True, "redirect": "/"})
@@ -990,7 +991,8 @@ def login_submit(request: Request):
 @app.post("/api/auth/logout")
 def logout():
     resp = JSONResponse({"ok": True})
-    resp.delete_cookie(_session_cookie_name())
+    secure_cookie = os.environ.get("BTB_WEB_COOKIE_SECURE", "1").strip() not in ("0", "false", "False")
+    resp.delete_cookie(_session_cookie_name(), httponly=True, samesite="lax", secure=secure_cookie)
     return resp
 
 
