@@ -14,6 +14,13 @@ from ta.momentum import RSIIndicator
 from ta.trend import ADXIndicator, EMAIndicator
 from ta.volatility import AverageTrueRange, BollingerBands
 
+# ---------------------------------------------------------------------------
+# H_V5 regime column helper
+# ---------------------------------------------------------------------------
+# REGIME_TRAIL_BARS: how many signal-TF bars to look back for the rolling high
+# used in the trailing stop. Matches the live bot's df["h"].iloc[-200:].max()
+REGIME_TRAIL_BARS = 200
+
 
 @dataclass
 class Costs:
@@ -244,6 +251,243 @@ def backtest_breakout(df: pd.DataFrame, p: dict, costs: Costs, capital=10_000.0)
     return metrics(eq, pnls)
 
 
+def compute_regime_column(df_signal: pd.DataFrame, df_daily: pd.DataFrame, p: dict) -> pd.Series:
+    """Return a Series (indexed like df_signal) of regime labels ('trend' or 'none').
+
+    Anti-lookahead guarantee:
+    - All daily indicators are shifted by 1 bar (uses the *previous* fully-closed daily bar).
+    - The result is merged onto signal bars by timestamp: for each signal bar at time T,
+      we use the latest daily regime whose timestamp is strictly less than T.
+    - Forward-fill propagates the most recent known regime into intraday gaps.
+
+    Regime = "trend" when ALL of:
+      1. price > EMA(ema_slow_period) on daily
+      2. EMA(ema_slow_period) slope is positive (rising)
+      3. EMA(regime_ema_fast) > EMA(ema_slow_period) on daily
+      4. RSI(regime_rsi_len) >= regime_rsi_min on daily
+
+    This exactly matches live main.py regime_filter() for mode=h_v5_b_plus_breakeven_ema100.
+    """
+    ema_slow_len = int(p.get("ema_slow", 200))
+    regime_fast_len = int(p.get("regime_ema_fast", 50))
+    regime_rsi_len = int(p.get("regime_rsi_len", 14))
+    regime_rsi_min = float(p.get("regime_rsi_min", 55))
+
+    d = df_daily.copy().reset_index(drop=True)
+
+    if len(d) < ema_slow_len + 2:
+        # Insufficient daily data — fall back to no regime filter (always "trend").
+        print(
+            f"[regime] insufficient daily data ({len(d)} bars < {ema_slow_len + 2} needed),"
+            " regime filter disabled"
+        )
+        return pd.Series("trend", index=df_signal.index)
+
+    ema200 = EMAIndicator(d["close"], ema_slow_len).ema_indicator()
+    ema50 = EMAIndicator(d["close"], regime_fast_len).ema_indicator()
+    rsi_d = RSIIndicator(d["close"], regime_rsi_len).rsi()
+
+    # Shift all indicators by 1 to use only the *previous* completed daily bar.
+    # This is equivalent to: at each daily bar i, regime is valid from bar i+1 onward.
+    close_prev = d["close"].shift(1)
+    ema200_prev = ema200.shift(1)
+    ema200_slope_prev = ema200.diff().shift(1)
+    ema50_prev = ema50.shift(1)
+    rsi_d_prev = rsi_d.shift(1)
+
+    regime_flag = (
+        (close_prev > ema200_prev)
+        & (ema200_slope_prev > 0)
+        & (ema50_prev > ema200_prev)
+        & (rsi_d_prev >= regime_rsi_min)
+    )
+
+    d["_regime"] = regime_flag.map({True: "trend", False: "none"})
+    d["_ts"] = d["ts"].astype(np.int64)
+
+    # Build a lookup: for signal bar at ts_sig, find the latest daily ts < ts_sig.
+    # Use merge_asof for efficient forward-fill merge.
+    sig = df_signal[["ts"]].copy()
+    sig["_ts_sig"] = sig["ts"].astype(np.int64)
+
+    daily_regime = d[["_ts", "_regime"]].dropna(subset=["_regime"]).copy()
+    daily_regime = daily_regime.sort_values("_ts").reset_index(drop=True)
+    sig_sorted = sig.sort_values("_ts_sig").reset_index()
+
+    merged = pd.merge_asof(
+        sig_sorted,
+        daily_regime.rename(columns={"_ts": "_ts_sig"}),
+        on="_ts_sig",
+        direction="backward",
+    )
+    merged = merged.set_index("index").sort_index()
+
+    result = merged["_regime"].fillna("none")
+    result.index = df_signal.index
+    return result
+
+
+def backtest_h_v5(df: pd.DataFrame, p: dict, costs: Costs, capital: float = 10_000.0) -> dict:
+    """Backtest the H_V5 breakeven+EMA100 strategy on a signal-TF dataframe.
+
+    The dataframe must contain a pre-computed column ``regime`` (values: 'trend'
+    or 'none').  Use ``compute_regime_column()`` to build it before calling this
+    function.  This design keeps the function signature compatible with all
+    other backtest_* functions so it plugs straight into eval_multisymbol().
+
+    Entry logic (mirrors h1_signals() in main.py, mode=h_v5_b_plus_breakeven_ema100):
+    - Skip bar when regime != 'trend'.
+    - Donchian breakout: close > don_hi of PREVIOUS bar (shift 1, no lookahead).
+    - Pullback: |close - pullback_ema| <= pullback_band_atr * ATR
+                AND 40 <= RSI <= 70
+                AND momentum_ema20 > pullback_ema (same 50-period EMA).
+    - Both conditions also require: momentum_ema20 > pullback_ema (mom_ok).
+    - Breakout additionally requires: close >= pullback_ema.
+    - RSI overheat guard: RSI < rsi_overheat (default 75).
+    - Signal fires if: rsi < rsi_overheat AND (breakout OR pullback).
+
+    All indicators are computed on the full df, then shifted by 1 so bar `i`
+    only sees values known as of bar `i-1` close. This matches the live bot
+    which reads the last closed candle.
+
+    Trailing stop (mirrors live bot REV-05 logic):
+    - trail = max(high over last REGIME_TRAIL_BARS bars) - trail_mult * ATR
+    - stop = max(stop, trail)  — only ratchets UP
+
+    Breakeven:
+    - When close >= entry + breakeven_r * init_risk, stop = max(stop, entry).
+
+    Exit: stop hit (low <= stop) or end of data.
+    """
+    don_period = int(p.get("donchian_period", 80))
+    ema_fast_len = int(p.get("ema_fast", 50))
+    momentum_ema_len = 20  # Fixed per live code: st.get("momentum_ema_len", 20)
+    atr_len = int(p.get("atr_period", 14))
+    rsi_len = int(p.get("rsi_period", 14))
+    rsi_overheat = float(p.get("rsi_overheat", 75))
+    pull_band_atr = float(p.get("pullback_band_atr", 0.8))
+    atr_sl_mult = float(p.get("atr_sl_trend_mult", 2.5))
+    trail_mult = float(p.get("atr_trail_mult", 8.0))
+    breakeven_r = float(p.get("breakeven_r", 1.0))
+    cooldown_bars = int(p.get("cooldown_bars", 3))
+
+    close = df["close"]
+    high = df["high"]
+    low = df["low"]
+
+    # don_hi is shifted by 1: at bar i (closed), we use the previous bar's Donchian high.
+    # This matches live h1_signals() which reads don_hi.iloc[-2] (one bar back from the
+    # forming candle = one bar back from the last closed bar in a backtest loop).
+    # ema_fast, ema_mom, atr, rsi are NOT shifted: bar i is already a fully-closed bar,
+    # so arr[i] is the closed-bar value, matching live iloc[-1] reads.
+    don_hi = high.rolling(don_period).max().shift(1)
+    ema_fast = EMAIndicator(close, ema_fast_len).ema_indicator()
+    ema_mom = EMAIndicator(close, momentum_ema_len).ema_indicator()
+    atr = AverageTrueRange(high, low, close, atr_len).average_true_range()
+    rsi = RSIIndicator(close, rsi_len).rsi()
+
+    has_regime = "regime" in df.columns
+    regime_col = df["regime"] if has_regime else pd.Series("trend", index=df.index)
+
+    warm = max(don_period, ema_fast_len, momentum_ema_len, atr_len, rsi_len) + 2
+
+    cash = capital
+    qty = 0.0
+    entry_cash = 0.0
+    entry_px = 0.0
+    stop_px = 0.0
+    init_risk = 0.0
+    cooldown_remaining = 0
+    eq: list[float] = []
+    pnls: list[float] = []
+
+    close_arr = close.to_numpy(dtype=float)
+    high_arr = high.to_numpy(dtype=float)
+    low_arr = low.to_numpy(dtype=float)
+    don_hi_arr = don_hi.to_numpy(dtype=float)
+    ema_fast_arr = ema_fast.to_numpy(dtype=float)
+    ema_mom_arr = ema_mom.to_numpy(dtype=float)
+    atr_arr = atr.to_numpy(dtype=float)
+    rsi_arr = rsi.to_numpy(dtype=float)
+    regime_arr = regime_col.to_numpy()
+
+    for i in range(warm, len(close_arr)):
+        c = close_arr[i]
+        lo = low_arr[i]
+        atr_v = atr_arr[i]
+        rsi_v = rsi_arr[i]
+
+        if np.isnan(atr_v) or np.isnan(rsi_v) or np.isnan(ema_fast_arr[i]) or np.isnan(don_hi_arr[i]):
+            eq.append(cash + qty * c)
+            continue
+
+        # --- Exit logic (evaluated before entry so we can re-enter same bar) ---
+        if qty > 0.0:
+            # Trailing stop ratchet: uses rolling high over last REGIME_TRAIL_BARS bars
+            start = max(0, i - REGIME_TRAIL_BARS + 1)
+            hi_since = high_arr[start:i + 1].max()
+            trail = hi_since - trail_mult * atr_v
+            if trail > stop_px:
+                stop_px = trail
+
+            # Breakeven move
+            if c >= (entry_px + breakeven_r * init_risk):
+                be_sl = max(stop_px, entry_px)
+                if be_sl > stop_px:
+                    stop_px = be_sl
+
+            # Stop hit
+            if lo <= stop_px:
+                exit_px = stop_px * (1.0 - costs.side_cost)
+                cash = qty * exit_px
+                pnls.append(cash - entry_cash)
+                qty = 0.0
+                cooldown_remaining = cooldown_bars
+
+        # Decrement cooldown each bar we are out of position.
+        if qty == 0.0 and cooldown_remaining > 0:
+            cooldown_remaining -= 1
+
+        # --- Entry logic ---
+        if qty == 0.0 and cooldown_remaining == 0 and regime_arr[i] == "trend":
+            pb_ema = ema_fast_arr[i]
+            mom_ema = ema_mom_arr[i]
+            don_prev = don_hi_arr[i]
+
+            if not (np.isnan(pb_ema) or np.isnan(mom_ema) or np.isnan(don_prev)):
+                mom_ok = mom_ema > pb_ema
+                breakout = (c > don_prev) and mom_ok and (c >= pb_ema)
+                pullback = False
+                if atr_v > 0:
+                    dist = abs(c - pb_ema)
+                    pullback = (
+                        (dist <= pull_band_atr * atr_v)
+                        and (40.0 <= rsi_v <= 70.0)
+                        and mom_ok
+                    )
+
+                cond = (rsi_v < rsi_overheat) and (breakout or pullback)
+                if cond:
+                    buy_px = c * (1.0 + costs.side_cost)
+                    qty = cash / buy_px
+                    entry_cash = cash
+                    entry_px = buy_px
+                    cash = 0.0
+                    stop_px = buy_px - atr_sl_mult * atr_v
+                    init_risk = max(buy_px - stop_px, 1e-9)
+
+        eq.append(cash + qty * c)
+
+    # Close any open position at last bar
+    if qty > 0.0 and eq:
+        c = close_arr[-1]
+        cash = qty * c * (1.0 - costs.side_cost)
+        pnls.append(cash - entry_cash)
+        eq[-1] = cash
+
+    return metrics(eq, pnls)
+
+
 def score(m):
     trades_pen = max(0, 6 - m["trade_count"]) * 2.0
     return m["net_return_pct"] - 0.55 * abs(m["max_drawdown_pct"]) + min(m["profit_factor"], 3) * 2 - trades_pen
@@ -294,6 +538,48 @@ def search_multisymbol(data_by_symbol: dict[str, pd.DataFrame], name, fn, grid):
         by_symbol, agg = eval_multisymbol(data_by_symbol, fn, p)
         rec = {
             "strategy": name,
+            "params": p,
+            "by_symbol": by_symbol,
+            "aggregate": agg,
+            "selection_score": selection_score(agg),
+        }
+        if best is None or rec["selection_score"] > best["selection_score"]:
+            best = rec
+    return best
+
+
+def search_h_v5(
+    signal_data: dict[str, pd.DataFrame],
+    daily_data: dict[str, pd.DataFrame],
+    grid: dict,
+) -> dict:
+    """Grid search for backtest_h_v5, handling the dual-TF regime merge.
+
+    For each parameter combination, the regime column is recomputed from the
+    daily data (since regime_rsi_min is in the grid). The merged signal df is
+    then passed to backtest_h_v5 via the standard eval_multisymbol path.
+
+    The regime column is pre-merged before splitting, so split boundaries apply
+    only to signal-TF rows (identical to all other strategies).
+    """
+    best = None
+    for vals in product(*grid.values()):
+        p = dict(zip(grid.keys(), vals))
+
+        # Build per-symbol signal dfs with the regime column for these params.
+        merged: dict[str, pd.DataFrame] = {}
+        for symbol, df_sig in signal_data.items():
+            df = df_sig.copy()
+            if symbol in daily_data:
+                df["regime"] = compute_regime_column(df, daily_data[symbol], p)
+            else:
+                # No daily data available; regime filter disabled (always trend).
+                df["regime"] = "trend"
+            merged[symbol] = df
+
+        by_symbol, agg = eval_multisymbol(merged, backtest_h_v5, p)
+        rec = {
+            "strategy": "h_v5_breakout",
             "params": p,
             "by_symbol": by_symbol,
             "aggregate": agg,
@@ -376,8 +662,21 @@ def main():
     ap.add_argument("--out-md", default="reports/BTB_STRATEGY_RESEARCH_REPORT.md")
     args = ap.parse_args()
 
+    db = Path(args.db)
     symbols = [s.strip() for s in args.symbols.split(",") if s.strip()]
-    data_by_symbol = {s: load_ohlcv(Path(args.db), s, args.timeframe, max_bars=args.max_bars) for s in symbols}
+    data_by_symbol = {s: load_ohlcv(db, s, args.timeframe, max_bars=args.max_bars) for s in symbols}
+
+    # Load daily data for H_V5 regime filter.
+    # Always use "1d" regardless of --timeframe, and load up to 2× max-bars (daily
+    # bars are sparse; 1000 signal bars at 1h = ~42 daily bars, barely enough for
+    # EMA200 warmup — load more bars on the daily TF unconditionally).
+    daily_max = max(args.max_bars, 2000)
+    daily_data: dict[str, pd.DataFrame] = {}
+    for s in symbols:
+        try:
+            daily_data[s] = load_ohlcv(db, s, "1d", max_bars=daily_max)
+        except ValueError:
+            print(f"[warn] No daily OHLCV for {s} — H_V5 regime filter will be disabled for this symbol.")
 
     base_params = {"ema_fast": 50, "ema_slow": 200}
     base_by_symbol, base_agg = eval_multisymbol(data_by_symbol, backtest_ema_cross, base_params)
@@ -386,6 +685,26 @@ def main():
         "params": base_params,
         "by_symbol": base_by_symbol,
         "aggregate": base_agg,
+    }
+
+    # H_V5 grid — parameters that directly correspond to config.yaml strategy block.
+    # ADX is NOT in H_V5 entry logic (confirmed from main.py h1_signals).
+    # BB params are NOT in H_V5 entry logic (only used in MR branch).
+    # momentum_ema_len is hardcoded to 20 (matches live code st.get("momentum_ema_len", 20)).
+    h_v5_grid = {
+        "donchian_period": [20, 40, 80],
+        "ema_fast": [20, 50],           # pullback EMA period (= pullback_ema_len in live)
+        "ema_slow": [200],              # regime EMA slow — no reason to vary
+        "regime_ema_fast": [50],        # regime EMA fast — fixed
+        "regime_rsi_len": [14],         # regime RSI period — fixed
+        "regime_rsi_min": [50, 55],     # gates how selective the regime filter is
+        "rsi_period": [14],
+        "rsi_overheat": [70, 75],
+        "atr_period": [14],
+        "pullback_band_atr": [0.8],     # ATR multiplier for pullback band width
+        "atr_sl_trend_mult": [2.0, 2.5],
+        "atr_trail_mult": [5.0, 8.0],
+        "breakeven_r": [1.0, 1.5],
     }
 
     candidates = [
@@ -418,6 +737,7 @@ def main():
                 "adx_min": [14, 18], "trail_atr_mult": [2.0, 2.6], "init_sl_atr_mult": [1.2, 1.6], "cooldown_bars": [2],
             },
         ),
+        search_h_v5(data_by_symbol, daily_data, h_v5_grid),
     ]
 
     winner = sorted(candidates, key=lambda c: c["selection_score"], reverse=True)[0]
