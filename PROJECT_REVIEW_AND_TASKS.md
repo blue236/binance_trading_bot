@@ -740,31 +740,31 @@ The H_V5 regime filter (EMA200 + RSI daily) may be filtering out valid entries o
 
 | Priority | Task | Agent | Estimated Effort |
 |----------|------|-------|-----------------|
-| 🔴 CRITICAL | DEV-01 Empty password startup | `btb-developer` | 1 hour |
+| ✅ DONE | DEV-01 Empty password startup | `btb-developer` | 1 hour |
 | ✅ DONE | REV-01 Auth security audit | `btb-reviewer` | 2 hours |
 | ✅ DONE | QUANT-01 Port H_V5 to backtester | `btb-quant` | 1–2 days |
-| 🟠 HIGH | DEV-02 Harden session tokens | `btb-developer` | 2 hours |
-| 🟠 HIGH | DEV-03 Credential silent fallback | `btb-developer` | 1 hour |
-| 🟠 HIGH | DEV-04 Atomic config save | `btb-developer` | 2 hours |
-| 🟠 HIGH | DEV-05 Daily loss guard sign check | `btb-developer` | 1 hour |
-| 🟠 HIGH | REV-02 Lookahead audit | `btb-reviewer` | 3 hours |
-| 🟠 HIGH | REV-03 ML lookahead in backtester | `btb-reviewer` | 2 hours |
-| 🟠 HIGH | REV-04 Credentials review | `btb-reviewer` | 2 hours |
-| 🟠 HIGH | TEST-01 `h1_signals()` edge cases | `btb-tester` | 3 hours |
-| 🟠 HIGH | TEST-02 `regime_filter()` tests | `btb-tester` | 3 hours |
-| 🟠 HIGH | TEST-03 Config validation tests | `btb-tester` | 2 hours |
-| 🟠 HIGH | TEST-04 Trade lifecycle integration | `btb-tester` | 4 hours |
-| 🟠 HIGH | TEST-05 Credential fallback tests | `btb-tester` | 2 hours |
+| ✅ DONE | DEV-02 Harden session tokens | `btb-developer` | 2 hours |
+| ✅ DONE | DEV-03 Credential silent fallback | `btb-developer` | 1 hour |
+| ✅ DONE | DEV-04 Atomic config save | `btb-developer` | 2 hours |
+| ✅ DONE | DEV-05 Daily loss guard sign check | `btb-developer` | 1 hour |
+| ✅ DONE | REV-02 Lookahead audit | `btb-reviewer` | 3 hours |
+| ✅ DONE | REV-03 ML lookahead in backtester | `btb-reviewer` | 2 hours |
+| ✅ DONE | REV-04 Credentials review | `btb-reviewer` | 2 hours |
+| ✅ DONE | TEST-01 `h1_signals()` edge cases | `btb-tester` | 3 hours |
+| ✅ DONE | TEST-02 `regime_filter()` tests | `btb-tester` | 3 hours |
+| ✅ DONE | TEST-03 Config validation tests | `btb-tester` | 2 hours |
+| ✅ DONE | TEST-04 Trade lifecycle integration | `btb-tester` | 4 hours |
+| ✅ DONE | TEST-05 Credential fallback tests | `btb-tester` | 2 hours |
 | ✅ DONE | QUANT-02 Fix ML lookahead | `btb-quant` | 3 hours |
 | ✅ DONE | QUANT-03 Full H_V5 optimization | `btb-quant` | 4 hours |
 | ✅ DONE | DEV-06 CSRF protection | `btb-developer` | 4 hours |
 | ✅ DONE | DEV-07 Chart refresh consistency | `btb-developer` | 3 hours |
-| 🟡 MEDIUM | REV-05 Risk math review | `btb-reviewer` | 2 hours |
-| 🟡 MEDIUM | TEST-06 Approval flow tests | `btb-tester` | 2 hours |
-| 🟡 MEDIUM | TEST-07 Coverage measurement | `btb-tester` | 1 hour |
+| ✅ DONE | REV-05 Risk math review | `btb-reviewer` | 2 hours |
+| ✅ DONE | TEST-06 Approval flow tests | `btb-tester` | 2 hours |
+| ✅ DONE | TEST-07 Coverage measurement | `btb-tester` | 1 hour |
 | ✅ DONE | QUANT-04 Kelly sizing analysis | `btb-quant` | 3 hours |
 | ✅ DONE | QUANT-05 Regime filter validation | `btb-quant` | 3 hours |
-| 🟢 LOW | DEV-08 Fix aggressive loop_sleep key | `btb-developer` | 30 min |
+| ✅ DONE | DEV-08 Fix aggressive loop_sleep key | `btb-developer` | 30 min |
 
 ---
 
