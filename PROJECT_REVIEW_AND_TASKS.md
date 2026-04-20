@@ -762,7 +762,7 @@ The H_V5 regime filter (EMA200 + RSI daily) may be filtering out valid entries o
 | 🟡 MEDIUM | REV-05 Risk math review | `btb-reviewer` | 2 hours |
 | 🟡 MEDIUM | TEST-06 Approval flow tests | `btb-tester` | 2 hours |
 | 🟡 MEDIUM | TEST-07 Coverage measurement | `btb-tester` | 1 hour |
-| 🟡 MEDIUM | QUANT-04 Kelly sizing analysis | `btb-quant` | 3 hours |
+| ✅ DONE | QUANT-04 Kelly sizing analysis | `btb-quant` | 3 hours |
 | 🟡 MEDIUM | QUANT-05 Regime filter validation | `btb-quant` | 3 hours |
 | 🟢 LOW | DEV-08 Fix aggressive loop_sleep key | `btb-developer` | 30 min |
 
@@ -909,6 +909,111 @@ Parameters **not updated** despite optimizer suggestion:
 
 ### Next Steps
 
-- **QUANT-04:** Kelly sizing analysis (can proceed with current train+val data)
 - **QUANT-05:** Regime filter on/off comparison
 - Re-run full 25,920-combo grid when BTC enters a new bull regime (test-split data will then cover a bull run), giving OOS validation across a full market cycle
+
+---
+
+## Appendix D — Kelly Sizing Analysis (2026-04-20)
+
+### Context
+
+This analysis evaluates whether `risk.per_trade_risk_pct` (0.5%) and `aggressive.risk.per_trade_risk_pct` (0.9%) are well-calibrated given the H_V5 strategy's actual win rate and profit factor from QUANT-03 backtesting.
+
+**Critical constraint:** The QUANT-03 test split (Feb 2025–Apr 2026) generated **zero trades** due to BTC/ETH/SOL being below EMA200 throughout that period. The only OOS trade sample available is the val split (Nov 2024–Feb 2025), which covered the 2024–2025 ATH bull run — a single, highly favorable market regime. Val metrics are treated as an upper-bound estimate, not an unbiased population estimate.
+
+### Kelly Formula
+
+```
+Full Kelly: f* = p - q/b
+where:
+  p = win rate
+  q = 1 - p  (loss rate)
+  b = avg_win / avg_loss  (derived: b = pf * q / p)
+  pf = profit factor = gross_wins / gross_losses
+```
+
+### Scenario 1 — Raw Val Split Metrics (Inflated)
+
+Source: QUANT-03 val split aggregate (3 symbols, Nov 2024–Feb 2025 ATH bull run)
+
+| Metric | Value |
+|--------|-------|
+| Win rate (p) | 85% |
+| Loss rate (q) | 15% |
+| Profit factor (pf) | 19.06 |
+| Win/loss ratio (b = pf×q/p) | 3.36 |
+| Full Kelly f\* | **80.5%** |
+| Half Kelly | 40.3% |
+| Quarter Kelly | 20.1% |
+
+**Assessment:** These numbers are unusable as sizing guides. The pf=19.06 is characteristic of a single compressed bull run where the regime filter correctly identified every entry and the trailing stop rode extended trends. In live trading across full market cycles, performance will regress materially. Using Scenario 1 to justify position sizing would be a classic overfitting error.
+
+### Scenario 2 — Stressed Conservative Estimate (Full-Cycle)
+
+Conservative estimates for a trend-following strategy evaluated across a full bull-bear cycle (industry benchmarks for momentum/breakout systems):
+
+| Metric | Value | Rationale |
+|--------|-------|-----------|
+| Win rate (p) | 55% | Typical for trend-following across mixed regimes |
+| Loss rate (q) | 45% | |
+| Profit factor (pf) | 2.0 | Conservative benchmark; H_V5 uses breakeven move which improves pf |
+| Win/loss ratio (b = pf×q/p) | 1.64 | |
+| Full Kelly f\* | **27.5%** | |
+| Half Kelly | **13.8%** | Most defensible safe upper bound |
+| Quarter Kelly | **6.9%** | Ultra-conservative |
+
+**Assessment:** Even under conservative assumptions, half-Kelly (13.8%) substantially exceeds both current config values. The 2% hard cap is the binding constraint, not the Kelly fraction.
+
+### Scenario 3 — Bear Market Stress Test
+
+Worst-case scenario to establish a floor: bear market where trend entries frequently fail.
+
+| Metric | Value |
+|--------|-------|
+| Win rate (p) | 45% |
+| Profit factor (pf) | 1.3 |
+| Win/loss ratio (b) | 1.59 |
+| Full Kelly f\* | **10.4%** |
+| Half Kelly | **5.2%** |
+
+**Assessment:** Even in the bear market stress scenario, half-Kelly (5.2%) exceeds both 0.5% and 0.9% by a factor of 5×. The current config is deeply sub-Kelly across all plausible scenarios.
+
+### Comparison Against Current Config
+
+| Config parameter | Current | Half-Kelly (val) | Half-Kelly (stressed) | Half-Kelly (bear) | Hard cap |
+|-----------------|---------|------------------|-----------------------|-------------------|----------|
+| `per_trade_risk_pct` | 0.50% | 40.3% | 13.8% | 5.2% | 2.0% |
+| `aggressive.per_trade_risk_pct` | 0.90% | 40.3% | 13.8% | 5.2% | 2.0% |
+
+Key finding: **The 2% hard cap is the binding constraint in every scenario.** Kelly analysis supports sizing higher than current values, but the absence of cross-regime OOS validation (zero test-split trades) means any increase must be conservative and defensible independently of the inflated val metrics.
+
+### Recommendation
+
+**Conservative mode (`per_trade_risk_pct`):** Increase from 0.50% to **0.75%**.
+
+Rationale:
+- 0.75% is bounded by quarter-Kelly of the stressed scenario (6.9%), providing a 9× safety margin
+- Even in the bear stress scenario, 0.75% is well below half-Kelly (5.2%)
+- The increase is modest enough to be reversed without significant account impact if live performance disappoints
+- Acceptable given that the H_V5 breakeven move reduces worst-case per-trade loss to approximately 0 at `breakeven_r=1.0 R`
+
+**Aggressive mode (`aggressive.risk.per_trade_risk_pct`):** Increase from 0.90% to **1.0%**.
+
+Rationale:
+- A 0.1pp increase reflects the same conservative direction without materially raising risk
+- Half-Kelly (stressed) = 13.75% technically permits much more, but zero test-split trades prohibit large increases
+- Aggressive mode is only active with `dry_run: true`, so the practical risk is limited to paper trading
+
+**Parameters not changed:**
+- `daily_loss_stop_pct`: Stays at 2.0% (conservative) / 4.0% (aggressive) — Kelly does not directly inform daily stop sizing
+- `atr_sl_trend_mult`, `atr_trail_mult`: Embargoed per QUANT-03 findings — zero OOS validation
+
+**Future action:** When the strategy accumulates 6+ months of live dry-run trade data with mixed-regime coverage, revisit this analysis with actual trade logs from `logs/*.csv`. A 50-trade sample spanning both bull and sideways conditions will provide a much more reliable p and b estimate.
+
+### Config Changes Applied
+
+| Parameter | Before | After | Reason |
+|-----------|--------|-------|--------|
+| `risk.per_trade_risk_pct` | 0.50% | **0.75%** | Quarter-Kelly of stressed scenario; defensible with zero cross-regime OOS |
+| `aggressive.risk.per_trade_risk_pct` | 0.90% | **1.0%** | Modest increment; aggressive mode is dry-run only |
