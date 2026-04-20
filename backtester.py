@@ -218,9 +218,9 @@ def label_future_returns(
     sell_threshold : float
         Minimum negative return magnitude to assign a sell label (-1).
     train_end_idx : int | None
-        Positional index (iloc-based) of the last bar that belongs to the
-        training window.  When provided, labels for bars at positions
-        ``>= train_end_idx - holding_period_bars + 1`` are set to NaN so
+        Exclusive upper bound of the training window (iloc length of the
+        training slice).  When provided, labels for bars at positions
+        ``>= train_end_idx - holding_period_bars`` are set to NaN so
         that no label ever depends on a price that lies beyond the training
         boundary.  Pass ``None`` only if you intend to label the full dataset
         for evaluation purposes; **never** pass ``None`` when the labels will
@@ -242,7 +242,7 @@ def label_future_returns(
         # set.  The last 'holding_period_bars' rows of the training slice have
         # no valid label because their future return requires prices from the
         # test window.
-        cutoff_pos = max(0, train_end_idx - holding_period_bars + 1)
+        cutoff_pos = max(0, train_end_idx - holding_period_bars)
         labels.iloc[cutoff_pos:train_end_idx] = float("nan")
 
     return labels
@@ -325,7 +325,7 @@ def ml_pattern_backtest(
         holding_period_bars,
         buy_threshold,
         sell_threshold,
-        train_end_idx=split_pos,  # positional cutoff within features_clean
+        train_end_idx=len(train_features),
     )
 
     train_data = train_features.copy()
