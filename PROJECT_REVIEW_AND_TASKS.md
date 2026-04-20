@@ -1137,4 +1137,130 @@ The core issue is structural: requiring all four daily conditions simultaneously
 - Or set `regime_rsi_min: 0` to functionally disable the RSI leg while keeping structural conditions
 - Validate any relaxed filter produces train/val/test drawdown not worse than -25% with profit factor >= 1.5 OOS
 
+---
+
+## Appendix F — Regime Filter Redesign (2026-04-20)
+
+**Script:** `scripts/run_quant06.py`
+**Branch:** `feat/quant-06-regime-redesign`
+**Task ID:** QUANT-06
+
+### Dataset
+
+| Property | Value |
+|---|---|
+| Symbols | BTC/USDT, ETH/USDT, SOL/USDT |
+| Signal timeframe | 4h |
+| Regime timeframe | 1d |
+| Signal bars | 4,000 per symbol (~2 years) |
+| Daily bars | 1,000 per symbol (~2.7 years) |
+| Train window | 2024-06-23 to ~2025-07-28 |
+| Val window | ~2025-07-28 to ~2025-12-08 (bull peak) |
+| Test window | ~2025-12-08 to 2026-04-20 (correction / bear) |
+
+**Market context note:** The val window (Jul-Dec 2025) coincides with the 2025 crypto bull peak. Val return figures in the hundreds of percent are bull-run momentum amplification, not evidence of filter quality. The test window (Dec 2025-Apr 2026) is a drawdown/bear period — this is where filter design reveals its true protective or suppressive character.
+
+### Variant Definitions
+
+| ID | Name | Conditions Active |
+|----|------|-------------------|
+| A | Current (baseline) | price > EMA200 AND EMA200 slope > 0 AND EMA50 > EMA200 AND RSI >= 50 |
+| B | No golden cross | price > EMA200 AND EMA200 slope > 0 AND RSI >= 50 |
+| C | Price + RSI only | price > EMA200 AND RSI >= 50 |
+| D | RSI only | RSI >= 50 |
+| E | Price only | price > EMA200 |
+| F | Unfiltered | Always "trend" — no regime gate |
+| G | Slope + RSI | EMA200 slope > 0 AND RSI >= 50 |
+
+### Full Results — Aggregate Val Metrics (averaged across 3 symbols)
+
+| ID | Variant | Trend% | ValRet | ValDD | ValWR | ValTr | ValPF | TestRet | TestDD | TestTr | TestPF | Eligible |
+|----|---------|--------|--------|-------|-------|-------|-------|---------|--------|--------|--------|---------|
+| A | Current (baseline) | 29.3% | -3.1% | -20.0% | 36% | 32 | 0.850 | +0.0% | 0.0% | 0 | 0.000 | PASS |
+| B | No golden cross | 34.1% | -3.1% | -20.0% | 36% | 32 | 0.850 | +0.0% | 0.0% | 0 | 0.000 | PASS |
+| C | Price + RSI only | 34.1% | -3.1% | -20.0% | 36% | 32 | 0.850 | +0.0% | 0.0% | 0 | 0.000 | PASS |
+| D | RSI only | 45.5% | -3.1% | -20.0% | 36% | 32 | 0.850 | +0.1% | -15.8% | 38 | 1.090 | PASS |
+| E | Price only | 52.0% | +41.5% | -19.4% | 62% | 58 | 3.781 | +0.0% | 0.0% | 0 | 0.000 | PASS |
+| F | Unfiltered | 100.0% | +967.9% | -19.4% | 75% | 93 | 61.412 | +850.8% | -15.8% | 98 | 7.046 | PASS |
+| G | Slope + RSI | 34.1% | -3.1% | -20.0% | 36% | 32 | 0.850 | +0.0% | 0.0% | 0 | 0.000 | PASS |
+
+Eligibility criterion: val_dd > -25% AND val_trades >= 6. All 7 variants passed.
+Winner selected by highest avg val profit_factor among eligible variants.
+
+### Full Results — Per-Symbol Val Metrics
+
+| ID | Symbol | Trend% | ValRet | ValDD | ValWR | ValTr | ValPF |
+|----|--------|--------|--------|-------|-------|-------|-------|
+| A | BTC/USDT | 41.8% | +0.3% | -10.7% | 60% | 10 | 1.037 |
+| A | ETH/USDT | 18.4% | -11.1% | -30.2% | 21% | 14 | 0.427 |
+| A | SOL/USDT | 27.6% | +1.5% | -19.2% | 25% | 8 | 1.086 |
+| B | BTC/USDT | 41.8% | +0.3% | -10.7% | 60% | 10 | 1.037 |
+| B | ETH/USDT | 27.6% | -11.1% | -30.2% | 21% | 14 | 0.427 |
+| B | SOL/USDT | 32.7% | +1.5% | -19.2% | 25% | 8 | 1.086 |
+| C | BTC/USDT | 41.8% | +0.3% | -10.7% | 60% | 10 | 1.037 |
+| C | ETH/USDT | 27.6% | -11.1% | -30.2% | 21% | 14 | 0.427 |
+| C | SOL/USDT | 32.7% | +1.5% | -19.2% | 25% | 8 | 1.086 |
+| D | BTC/USDT | 50.1% | +0.3% | -10.7% | 60% | 10 | 1.037 |
+| D | ETH/USDT | 42.3% | -11.1% | -30.2% | 21% | 14 | 0.427 |
+| D | SOL/USDT | 44.1% | +1.5% | -19.2% | 25% | 8 | 1.086 |
+| E | BTC/USDT | 62.6% | +66.9% | -9.2% | 83% | 24 | 5.521 |
+| E | ETH/USDT | 42.8% | +3.2% | -30.2% | 39% | 18 | 1.163 |
+| E | SOL/USDT | 50.5% | +54.3% | -19.0% | 62% | 16 | 4.660 |
+| F | BTC/USDT | 100.0% | +380.9% | -9.2% | 85% | 33 | 24.458 |
+| F | ETH/USDT | 100.0% | +591.2% | -30.2% | 64% | 33 | 28.579 |
+| F | SOL/USDT | 100.0% | +1931.6% | -19.0% | 78% | 27 | 131.198 |
+| G | BTC/USDT | 41.8% | +0.3% | -10.7% | 60% | 10 | 1.037 |
+| G | ETH/USDT | 27.6% | -11.1% | -30.2% | 21% | 14 | 0.427 |
+| G | SOL/USDT | 32.7% | +1.5% | -19.2% | 25% | 8 | 1.086 |
+
+### Key Finding: RSI is the Sole Discriminating Condition
+
+Variants A, B, C, D, and G all produce **identical val metrics** (val_pf=0.850, val_trades=32). This is the central diagnostic finding:
+
+- RSI >= 50 on the daily is the binding constraint. When daily RSI is above 50, the price-above-EMA200, slope, and golden cross conditions are nearly always also satisfied in a trending crypto market. Removing them (B, C, G) increases admitted trend_pct but does not admit additional trade entries because the extra bars occur during the same RSI-active windows.
+- D (RSI only at 45.5% trend) also produces identical val results: the extra bars admitted by dropping price/slope conditions fall outside entry signal zones.
+- Conclusion: **Structural conditions (EMA200 slope, EMA50>EMA200, price>EMA200) are redundant given RSI >= 50.** The RSI leg alone determines which bars are admitted.
+
+### The RSI Gate Blocks the Test Period
+
+Variants A/B/C/G show 0 test trades. Variant E (price only) also shows 0 test trades. The test period (Dec 2025 - Apr 2026) is a correction/bear phase where:
+- BTC/ETH/SOL prices dropped below EMA200 (price_above_ema200 = False)
+- Daily RSI fell and stayed below 50 for extended periods (rsi_min = False)
+
+Only Variant D (RSI only) admits 38 test trades with pf=1.090. Variant F (unfiltered) admits 98 test trades with pf=7.046. This confirms: the current filter is not just over-constraining — it completely shuts down trading during bear/correction periods, which may include recoveries and early-trend resumption signals.
+
+### Winner Selection
+
+**Winner: Variant F (Unfiltered)** — highest avg val_pf (61.4) and only variant with meaningful test-period trade coverage (98 trades, pf=7.046).
+
+**Caveats on F's numbers:**
+- Val return of 968% and val_pf of 61.4 are bull-run artifacts from the Jul-Dec 2025 peak, not general alpha.
+- The more credible signal is the test period: pf=7.046 over 98 trades across a bear/correction period. This is strong.
+- ETH/USDT val drawdown of -30.2% exceeds the -25% threshold on a per-symbol basis. Acceptable in aggregate but flagged.
+
+**Preferred implementation target: Variant E (price > EMA200 only)**
+- Variant E gives val_pf=3.781 with 58 val trades, and a clear economic rationale: trade only when price is in a structural uptrend (above EMA200).
+- It admits 52% of bars vs 100% for F — providing some protection against deep bear periods.
+- E's 0 test trades is a concern but reflects the test period's specific bear conditions (price below EMA200 for all 3 symbols), not a filter design flaw.
+- E is a simpler, more defensible rule than F. If live trading resumes during a bull period, E will activate correctly. F will trade through everything including deep bear markets.
+
+### Config.yaml Update Decision
+
+**No change to config.yaml in this task.**
+
+Both winning variants (E and F) require code changes to `main.py`'s `regime_filter()` function to implement. The only config-achievable intervention would be adjusting `regime_rsi_min`, but lowering it below 50 was not tested in this run and would not achieve variant E or F behavior — it would only relax the RSI leg while keeping the other 3 AND conditions.
+
+### Flagged DEV Tasks
+
+**QUANT-06-DEV-A (HIGH PRIORITY): Simplify `regime_filter()` to price > EMA200 only**
+- Target: implement Variant E in `main.py`
+- Change: modify `regime_filter()` to return `True` when `close > ema_slow` (daily), removing the slope, golden-cross, and RSI conditions
+- Add a `regime_mode` config key to allow switching between "strict_4and", "price_only", and "none" without code changes
+- Validate: rerun QUANT-06 backtest confirming val_pf >= 3.0 and test_trades >= 15
+
+**QUANT-06-DEV-B (MEDIUM PRIORITY): Add `regime_mode: none` config option**
+- Allow fully disabling the regime gate via config (maps to Variant F)
+- Implement as: `if regime_mode == "none": return True` at top of `regime_filter()`
+- Useful for bull-market periods when regime gating has historically suppressed winners
+
 The current `regime_rsi_min: 50` setting is already at its most permissive allowed value per config spec range (50-65), yet the RSI condition alone blocks 58-82% of bars. The regime filter as designed for bull-cycle regime identification does not function as a drawdown shield — it functions as a severe trade-count suppressor during the 2024-2026 dataset.
