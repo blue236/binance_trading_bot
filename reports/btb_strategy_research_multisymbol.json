@@ -2,27 +2,15 @@
   "data": {
     "db_path": "webapp_state.sqlite",
     "symbols": [
-      "BTC/USDT",
-      "ETH/USDT",
-      "SOL/USDT"
+      "BTC/USDC"
     ],
-    "timeframe": "1d",
+    "timeframe": "1h",
     "max_bars": 1000,
     "coverage": {
-      "BTC/USDT": {
+      "BTC/USDC": {
         "bars": 1000,
-        "from": "2023-06-02 00:00:00+00:00",
-        "to": "2026-02-25 00:00:00+00:00"
-      },
-      "ETH/USDT": {
-        "bars": 1000,
-        "from": "2023-06-02 00:00:00+00:00",
-        "to": "2026-02-25 00:00:00+00:00"
-      },
-      "SOL/USDT": {
-        "bars": 1000,
-        "from": "2023-06-02 00:00:00+00:00",
-        "to": "2026-02-25 00:00:00+00:00"
+        "from": "2026-03-06 23:00:00+00:00",
+        "to": "2026-04-17 14:00:00+00:00"
       }
     }
   },
@@ -38,53 +26,13 @@
       "ema_slow": 200
     },
     "by_symbol": {
-      "BTC/USDT": {
+      "BTC/USDC": {
         "train": {
-          "net_return_pct": 142.7,
-          "max_drawdown_pct": -26.15,
-          "win_rate_pct": 100.0,
-          "trade_count": 1,
-          "profit_factor": 999.0
-        },
-        "val": {
-          "net_return_pct": 0.0,
-          "max_drawdown_pct": 0.0,
+          "net_return_pct": -6.76,
+          "max_drawdown_pct": -11.63,
           "win_rate_pct": 0.0,
-          "trade_count": 0,
-          "profit_factor": 0.0
-        },
-        "test": {
-          "net_return_pct": 0.0,
-          "max_drawdown_pct": 0.0,
-          "win_rate_pct": 0.0,
-          "trade_count": 0,
-          "profit_factor": 0.0
-        },
-        "bars": 1000,
-        "from": "2023-06-02 00:00:00+00:00",
-        "to": "2026-02-25 00:00:00+00:00",
-        "split": {
-          "train": [
-            0,
-            600
-          ],
-          "val": [
-            600,
-            800
-          ],
-          "test": [
-            800,
-            1000
-          ]
-        }
-      },
-      "ETH/USDT": {
-        "train": {
-          "net_return_pct": 21.14,
-          "max_drawdown_pct": -42.36,
-          "win_rate_pct": 50.0,
           "trade_count": 2,
-          "profit_factor": 16.031
+          "profit_factor": 0.0
         },
         "val": {
           "net_return_pct": 0.0,
@@ -101,48 +49,8 @@
           "profit_factor": 0.0
         },
         "bars": 1000,
-        "from": "2023-06-02 00:00:00+00:00",
-        "to": "2026-02-25 00:00:00+00:00",
-        "split": {
-          "train": [
-            0,
-            600
-          ],
-          "val": [
-            600,
-            800
-          ],
-          "test": [
-            800,
-            1000
-          ]
-        }
-      },
-      "SOL/USDT": {
-        "train": {
-          "net_return_pct": 204.04,
-          "max_drawdown_pct": -38.23,
-          "win_rate_pct": 100.0,
-          "trade_count": 1,
-          "profit_factor": 999.0
-        },
-        "val": {
-          "net_return_pct": 0.0,
-          "max_drawdown_pct": 0.0,
-          "win_rate_pct": 0.0,
-          "trade_count": 0,
-          "profit_factor": 0.0
-        },
-        "test": {
-          "net_return_pct": 0.0,
-          "max_drawdown_pct": 0.0,
-          "win_rate_pct": 0.0,
-          "trade_count": 0,
-          "profit_factor": 0.0
-        },
-        "bars": 1000,
-        "from": "2023-06-02 00:00:00+00:00",
-        "to": "2026-02-25 00:00:00+00:00",
+        "from": "2026-03-06 23:00:00+00:00",
+        "to": "2026-04-17 14:00:00+00:00",
         "split": {
           "train": [
             0,
@@ -161,11 +69,11 @@
     },
     "aggregate": {
       "train": {
-        "net_return_pct": 122.63,
-        "max_drawdown_pct": -35.58,
-        "win_rate_pct": 83.33,
-        "trade_count": 4,
-        "profit_factor": 671.344
+        "net_return_pct": -6.76,
+        "max_drawdown_pct": -11.63,
+        "win_rate_pct": 0.0,
+        "trade_count": 2,
+        "profit_factor": 0.0
       },
       "val": {
         "net_return_pct": 0.0,
@@ -193,7 +101,7 @@
         "atr_len": 14,
         "adx_len": 14,
         "adx_min": 14,
-        "rsi_reclaim": 42,
+        "rsi_reclaim": 38,
         "rsi_upper": 60,
         "rsi_take": 70,
         "sl_atr_mult": 1.2,
@@ -201,111 +109,31 @@
         "cooldown_bars": 2
       },
       "by_symbol": {
-        "BTC/USDT": {
+        "BTC/USDC": {
           "train": {
-            "net_return_pct": -11.72,
-            "max_drawdown_pct": -14.8,
-            "win_rate_pct": 42.86,
-            "trade_count": 7,
-            "profit_factor": 0.449
+            "net_return_pct": 0.0,
+            "max_drawdown_pct": 0.0,
+            "win_rate_pct": 0.0,
+            "trade_count": 0,
+            "profit_factor": 0.0
           },
           "val": {
-            "net_return_pct": 5.74,
-            "max_drawdown_pct": -2.47,
+            "net_return_pct": 2.69,
+            "max_drawdown_pct": -0.37,
             "win_rate_pct": 100.0,
-            "trade_count": 2,
+            "trade_count": 1,
             "profit_factor": 999.0
           },
           "test": {
-            "net_return_pct": 0.0,
-            "max_drawdown_pct": 0.0,
-            "win_rate_pct": 0.0,
-            "trade_count": 0,
-            "profit_factor": 0.0
+            "net_return_pct": 2.54,
+            "max_drawdown_pct": -0.99,
+            "win_rate_pct": 100.0,
+            "trade_count": 1,
+            "profit_factor": 999.0
           },
           "bars": 1000,
-          "from": "2023-06-02 00:00:00+00:00",
-          "to": "2026-02-25 00:00:00+00:00",
-          "split": {
-            "train": [
-              0,
-              600
-            ],
-            "val": [
-              600,
-              800
-            ],
-            "test": [
-              800,
-              1000
-            ]
-          }
-        },
-        "ETH/USDT": {
-          "train": {
-            "net_return_pct": -27.16,
-            "max_drawdown_pct": -35.14,
-            "win_rate_pct": 22.22,
-            "trade_count": 9,
-            "profit_factor": 0.358
-          },
-          "val": {
-            "net_return_pct": 0.0,
-            "max_drawdown_pct": 0.0,
-            "win_rate_pct": 0.0,
-            "trade_count": 0,
-            "profit_factor": 0.0
-          },
-          "test": {
-            "net_return_pct": 0.0,
-            "max_drawdown_pct": 0.0,
-            "win_rate_pct": 0.0,
-            "trade_count": 0,
-            "profit_factor": 0.0
-          },
-          "bars": 1000,
-          "from": "2023-06-02 00:00:00+00:00",
-          "to": "2026-02-25 00:00:00+00:00",
-          "split": {
-            "train": [
-              0,
-              600
-            ],
-            "val": [
-              600,
-              800
-            ],
-            "test": [
-              800,
-              1000
-            ]
-          }
-        },
-        "SOL/USDT": {
-          "train": {
-            "net_return_pct": -10.88,
-            "max_drawdown_pct": -36.45,
-            "win_rate_pct": 28.57,
-            "trade_count": 7,
-            "profit_factor": 0.748
-          },
-          "val": {
-            "net_return_pct": 0.0,
-            "max_drawdown_pct": 0.0,
-            "win_rate_pct": 0.0,
-            "trade_count": 0,
-            "profit_factor": 0.0
-          },
-          "test": {
-            "net_return_pct": 0.0,
-            "max_drawdown_pct": 0.0,
-            "win_rate_pct": 0.0,
-            "trade_count": 0,
-            "profit_factor": 0.0
-          },
-          "bars": 1000,
-          "from": "2023-06-02 00:00:00+00:00",
-          "to": "2026-02-25 00:00:00+00:00",
+          "from": "2026-03-06 23:00:00+00:00",
+          "to": "2026-04-17 14:00:00+00:00",
           "split": {
             "train": [
               0,
@@ -324,34 +152,34 @@
       },
       "aggregate": {
         "train": {
-          "net_return_pct": -16.59,
-          "max_drawdown_pct": -28.8,
-          "win_rate_pct": 31.22,
-          "trade_count": 23,
-          "profit_factor": 0.518
-        },
-        "val": {
-          "net_return_pct": 1.91,
-          "max_drawdown_pct": -0.82,
-          "win_rate_pct": 33.33,
-          "trade_count": 2,
-          "profit_factor": 333.0
-        },
-        "test": {
           "net_return_pct": 0.0,
           "max_drawdown_pct": 0.0,
           "win_rate_pct": 0.0,
           "trade_count": 0,
           "profit_factor": 0.0
+        },
+        "val": {
+          "net_return_pct": 2.69,
+          "max_drawdown_pct": -0.37,
+          "win_rate_pct": 100.0,
+          "trade_count": 1,
+          "profit_factor": 999.0
+        },
+        "test": {
+          "net_return_pct": 2.54,
+          "max_drawdown_pct": -0.99,
+          "win_rate_pct": 100.0,
+          "trade_count": 1,
+          "profit_factor": 999.0
         }
       },
-      "selection_score": -30.8435
+      "selection_score": -25.7836
     },
     {
       "strategy": "mean_reversion_bb",
       "params": {
         "bb_len": 20,
-        "bb_mult": 1.8,
+        "bb_mult": 1.6,
         "rsi_len": 14,
         "atr_len": 14,
         "adx_len": 14,
@@ -362,111 +190,31 @@
         "max_hold_bars": 8
       },
       "by_symbol": {
-        "BTC/USDT": {
+        "BTC/USDC": {
           "train": {
-            "net_return_pct": 12.22,
-            "max_drawdown_pct": -14.22,
-            "win_rate_pct": 40.0,
-            "trade_count": 10,
-            "profit_factor": 1.567
+            "net_return_pct": -4.0,
+            "max_drawdown_pct": -5.85,
+            "win_rate_pct": 33.33,
+            "trade_count": 12,
+            "profit_factor": 0.428
           },
           "val": {
-            "net_return_pct": 14.2,
-            "max_drawdown_pct": -3.59,
+            "net_return_pct": -2.07,
+            "max_drawdown_pct": -3.08,
+            "win_rate_pct": 40.0,
+            "trade_count": 5,
+            "profit_factor": 0.295
+          },
+          "test": {
+            "net_return_pct": 0.91,
+            "max_drawdown_pct": -0.15,
             "win_rate_pct": 100.0,
-            "trade_count": 3,
+            "trade_count": 1,
             "profit_factor": 999.0
           },
-          "test": {
-            "net_return_pct": 4.2,
-            "max_drawdown_pct": -4.25,
-            "win_rate_pct": 50.0,
-            "trade_count": 2,
-            "profit_factor": 28.721
-          },
           "bars": 1000,
-          "from": "2023-06-02 00:00:00+00:00",
-          "to": "2026-02-25 00:00:00+00:00",
-          "split": {
-            "train": [
-              0,
-              600
-            ],
-            "val": [
-              600,
-              800
-            ],
-            "test": [
-              800,
-              1000
-            ]
-          }
-        },
-        "ETH/USDT": {
-          "train": {
-            "net_return_pct": 1.33,
-            "max_drawdown_pct": -6.43,
-            "win_rate_pct": 50.0,
-            "trade_count": 4,
-            "profit_factor": 1.153
-          },
-          "val": {
-            "net_return_pct": 4.05,
-            "max_drawdown_pct": -7.75,
-            "win_rate_pct": 50.0,
-            "trade_count": 2,
-            "profit_factor": 1.533
-          },
-          "test": {
-            "net_return_pct": 18.97,
-            "max_drawdown_pct": -7.18,
-            "win_rate_pct": 75.0,
-            "trade_count": 4,
-            "profit_factor": 3.182
-          },
-          "bars": 1000,
-          "from": "2023-06-02 00:00:00+00:00",
-          "to": "2026-02-25 00:00:00+00:00",
-          "split": {
-            "train": [
-              0,
-              600
-            ],
-            "val": [
-              600,
-              800
-            ],
-            "test": [
-              800,
-              1000
-            ]
-          }
-        },
-        "SOL/USDT": {
-          "train": {
-            "net_return_pct": -9.95,
-            "max_drawdown_pct": -18.3,
-            "win_rate_pct": 50.0,
-            "trade_count": 6,
-            "profit_factor": 0.619
-          },
-          "val": {
-            "net_return_pct": 20.73,
-            "max_drawdown_pct": -14.75,
-            "win_rate_pct": 60.0,
-            "trade_count": 5,
-            "profit_factor": 2.067
-          },
-          "test": {
-            "net_return_pct": -11.25,
-            "max_drawdown_pct": -19.75,
-            "win_rate_pct": 0.0,
-            "trade_count": 3,
-            "profit_factor": 0.0
-          },
-          "bars": 1000,
-          "from": "2023-06-02 00:00:00+00:00",
-          "to": "2026-02-25 00:00:00+00:00",
+          "from": "2026-03-06 23:00:00+00:00",
+          "to": "2026-04-17 14:00:00+00:00",
           "split": {
             "train": [
               0,
@@ -485,33 +233,33 @@
       },
       "aggregate": {
         "train": {
-          "net_return_pct": 1.2,
-          "max_drawdown_pct": -12.98,
-          "win_rate_pct": 46.67,
-          "trade_count": 20,
-          "profit_factor": 1.113
+          "net_return_pct": -4.0,
+          "max_drawdown_pct": -5.85,
+          "win_rate_pct": 33.33,
+          "trade_count": 12,
+          "profit_factor": 0.428
         },
         "val": {
-          "net_return_pct": 12.99,
-          "max_drawdown_pct": -8.7,
-          "win_rate_pct": 70.0,
-          "trade_count": 10,
-          "profit_factor": 334.2
+          "net_return_pct": -2.07,
+          "max_drawdown_pct": -3.08,
+          "win_rate_pct": 40.0,
+          "trade_count": 5,
+          "profit_factor": 0.295
         },
         "test": {
-          "net_return_pct": 3.97,
-          "max_drawdown_pct": -10.39,
-          "win_rate_pct": 41.67,
-          "trade_count": 9,
-          "profit_factor": 10.634
+          "net_return_pct": 0.91,
+          "max_drawdown_pct": -0.15,
+          "win_rate_pct": 100.0,
+          "trade_count": 1,
+          "profit_factor": 999.0
         }
       },
-      "selection_score": 8.7328
+      "selection_score": -22.0732
     },
     {
       "strategy": "breakout_dynamic_exit",
       "params": {
-        "don_len": 20,
+        "don_len": 10,
         "ema_slow": 100,
         "adx_len": 14,
         "atr_len": 14,
@@ -521,111 +269,31 @@
         "cooldown_bars": 2
       },
       "by_symbol": {
-        "BTC/USDT": {
+        "BTC/USDC": {
           "train": {
-            "net_return_pct": -5.69,
-            "max_drawdown_pct": -21.63,
-            "win_rate_pct": 44.44,
-            "trade_count": 18,
-            "profit_factor": 0.859
+            "net_return_pct": -4.95,
+            "max_drawdown_pct": -6.29,
+            "win_rate_pct": 22.22,
+            "trade_count": 9,
+            "profit_factor": 0.171
           },
           "val": {
-            "net_return_pct": -1.08,
-            "max_drawdown_pct": -8.41,
-            "win_rate_pct": 50.0,
-            "trade_count": 2,
-            "profit_factor": 0.653
-          },
-          "test": {
-            "net_return_pct": -3.35,
-            "max_drawdown_pct": -3.35,
-            "win_rate_pct": 0.0,
-            "trade_count": 1,
-            "profit_factor": 0.0
-          },
-          "bars": 1000,
-          "from": "2023-06-02 00:00:00+00:00",
-          "to": "2026-02-25 00:00:00+00:00",
-          "split": {
-            "train": [
-              0,
-              600
-            ],
-            "val": [
-              600,
-              800
-            ],
-            "test": [
-              800,
-              1000
-            ]
-          }
-        },
-        "ETH/USDT": {
-          "train": {
-            "net_return_pct": 12.02,
-            "max_drawdown_pct": -24.48,
-            "win_rate_pct": 36.36,
-            "trade_count": 11,
-            "profit_factor": 1.356
-          },
-          "val": {
-            "net_return_pct": 15.9,
-            "max_drawdown_pct": -14.14,
-            "win_rate_pct": 60.0,
+            "net_return_pct": -0.74,
+            "max_drawdown_pct": -2.26,
+            "win_rate_pct": 40.0,
             "trade_count": 5,
-            "profit_factor": 2.198
+            "profit_factor": 0.661
           },
           "test": {
-            "net_return_pct": 0.0,
-            "max_drawdown_pct": 0.0,
-            "win_rate_pct": 0.0,
-            "trade_count": 0,
-            "profit_factor": 0.0
+            "net_return_pct": -1.24,
+            "max_drawdown_pct": -2.85,
+            "win_rate_pct": 16.67,
+            "trade_count": 6,
+            "profit_factor": 0.467
           },
           "bars": 1000,
-          "from": "2023-06-02 00:00:00+00:00",
-          "to": "2026-02-25 00:00:00+00:00",
-          "split": {
-            "train": [
-              0,
-              600
-            ],
-            "val": [
-              600,
-              800
-            ],
-            "test": [
-              800,
-              1000
-            ]
-          }
-        },
-        "SOL/USDT": {
-          "train": {
-            "net_return_pct": 127.64,
-            "max_drawdown_pct": -25.71,
-            "win_rate_pct": 42.86,
-            "trade_count": 14,
-            "profit_factor": 2.402
-          },
-          "val": {
-            "net_return_pct": 7.02,
-            "max_drawdown_pct": -10.82,
-            "win_rate_pct": 50.0,
-            "trade_count": 2,
-            "profit_factor": 20.398
-          },
-          "test": {
-            "net_return_pct": 0.0,
-            "max_drawdown_pct": 0.0,
-            "win_rate_pct": 0.0,
-            "trade_count": 0,
-            "profit_factor": 0.0
-          },
-          "bars": 1000,
-          "from": "2023-06-02 00:00:00+00:00",
-          "to": "2026-02-25 00:00:00+00:00",
+          "from": "2026-03-06 23:00:00+00:00",
+          "to": "2026-04-17 14:00:00+00:00",
           "split": {
             "train": [
               0,
@@ -644,150 +312,152 @@
       },
       "aggregate": {
         "train": {
-          "net_return_pct": 44.66,
-          "max_drawdown_pct": -23.94,
-          "win_rate_pct": 41.22,
-          "trade_count": 43,
-          "profit_factor": 1.539
+          "net_return_pct": -4.95,
+          "max_drawdown_pct": -6.29,
+          "win_rate_pct": 22.22,
+          "trade_count": 9,
+          "profit_factor": 0.171
         },
         "val": {
-          "net_return_pct": 7.28,
-          "max_drawdown_pct": -11.12,
-          "win_rate_pct": 53.33,
-          "trade_count": 9,
-          "profit_factor": 7.75
+          "net_return_pct": -0.74,
+          "max_drawdown_pct": -2.26,
+          "win_rate_pct": 40.0,
+          "trade_count": 5,
+          "profit_factor": 0.661
         },
         "test": {
-          "net_return_pct": -1.12,
-          "max_drawdown_pct": -1.12,
+          "net_return_pct": -1.24,
+          "max_drawdown_pct": -2.85,
+          "win_rate_pct": 16.67,
+          "trade_count": 6,
+          "profit_factor": 0.467
+        }
+      },
+      "selection_score": -12.7279
+    },
+    {
+      "strategy": "h_v5_breakout",
+      "params": {
+        "donchian_period": 20,
+        "ema_fast": 20,
+        "ema_slow": 200,
+        "regime_ema_fast": 50,
+        "regime_rsi_len": 14,
+        "regime_rsi_min": 50,
+        "rsi_period": 14,
+        "rsi_overheat": 70,
+        "atr_period": 14,
+        "pullback_band_atr": 0.8,
+        "atr_sl_trend_mult": 2.0,
+        "atr_trail_mult": 5.0,
+        "breakeven_r": 1.0
+      },
+      "by_symbol": {
+        "BTC/USDC": {
+          "train": {
+            "net_return_pct": 0.0,
+            "max_drawdown_pct": 0.0,
+            "win_rate_pct": 0.0,
+            "trade_count": 0,
+            "profit_factor": 0.0
+          },
+          "val": {
+            "net_return_pct": 0.0,
+            "max_drawdown_pct": 0.0,
+            "win_rate_pct": 0.0,
+            "trade_count": 0,
+            "profit_factor": 0.0
+          },
+          "test": {
+            "net_return_pct": 0.0,
+            "max_drawdown_pct": 0.0,
+            "win_rate_pct": 0.0,
+            "trade_count": 0,
+            "profit_factor": 0.0
+          },
+          "bars": 1000,
+          "from": "2026-03-06 23:00:00+00:00",
+          "to": "2026-04-17 14:00:00+00:00",
+          "split": {
+            "train": [
+              0,
+              600
+            ],
+            "val": [
+              600,
+              800
+            ],
+            "test": [
+              800,
+              1000
+            ]
+          }
+        }
+      },
+      "aggregate": {
+        "train": {
+          "net_return_pct": 0.0,
+          "max_drawdown_pct": 0.0,
           "win_rate_pct": 0.0,
-          "trade_count": 1,
+          "trade_count": 0,
+          "profit_factor": 0.0
+        },
+        "val": {
+          "net_return_pct": 0.0,
+          "max_drawdown_pct": 0.0,
+          "win_rate_pct": 0.0,
+          "trade_count": 0,
+          "profit_factor": 0.0
+        },
+        "test": {
+          "net_return_pct": 0.0,
+          "max_drawdown_pct": 0.0,
+          "win_rate_pct": 0.0,
+          "trade_count": 0,
           "profit_factor": 0.0
         }
       },
-      "selection_score": -15.231
+      "selection_score": -39.0
     }
   ],
   "winner": {
-    "strategy": "mean_reversion_bb",
+    "strategy": "breakout_dynamic_exit",
     "params": {
-      "bb_len": 20,
-      "bb_mult": 1.8,
-      "rsi_len": 14,
-      "atr_len": 14,
+      "don_len": 10,
+      "ema_slow": 100,
       "adx_len": 14,
-      "adx_max": 24,
-      "rsi_entry": 40,
-      "rsi_exit": 55,
-      "sl_atr_mult": 1.2,
-      "max_hold_bars": 8
+      "atr_len": 14,
+      "adx_min": 14,
+      "trail_atr_mult": 2.0,
+      "init_sl_atr_mult": 1.2,
+      "cooldown_bars": 2
     },
     "by_symbol": {
-      "BTC/USDT": {
+      "BTC/USDC": {
         "train": {
-          "net_return_pct": 12.22,
-          "max_drawdown_pct": -14.22,
+          "net_return_pct": -4.95,
+          "max_drawdown_pct": -6.29,
+          "win_rate_pct": 22.22,
+          "trade_count": 9,
+          "profit_factor": 0.171
+        },
+        "val": {
+          "net_return_pct": -0.74,
+          "max_drawdown_pct": -2.26,
           "win_rate_pct": 40.0,
-          "trade_count": 10,
-          "profit_factor": 1.567
-        },
-        "val": {
-          "net_return_pct": 14.2,
-          "max_drawdown_pct": -3.59,
-          "win_rate_pct": 100.0,
-          "trade_count": 3,
-          "profit_factor": 999.0
-        },
-        "test": {
-          "net_return_pct": 4.2,
-          "max_drawdown_pct": -4.25,
-          "win_rate_pct": 50.0,
-          "trade_count": 2,
-          "profit_factor": 28.721
-        },
-        "bars": 1000,
-        "from": "2023-06-02 00:00:00+00:00",
-        "to": "2026-02-25 00:00:00+00:00",
-        "split": {
-          "train": [
-            0,
-            600
-          ],
-          "val": [
-            600,
-            800
-          ],
-          "test": [
-            800,
-            1000
-          ]
-        }
-      },
-      "ETH/USDT": {
-        "train": {
-          "net_return_pct": 1.33,
-          "max_drawdown_pct": -6.43,
-          "win_rate_pct": 50.0,
-          "trade_count": 4,
-          "profit_factor": 1.153
-        },
-        "val": {
-          "net_return_pct": 4.05,
-          "max_drawdown_pct": -7.75,
-          "win_rate_pct": 50.0,
-          "trade_count": 2,
-          "profit_factor": 1.533
-        },
-        "test": {
-          "net_return_pct": 18.97,
-          "max_drawdown_pct": -7.18,
-          "win_rate_pct": 75.0,
-          "trade_count": 4,
-          "profit_factor": 3.182
-        },
-        "bars": 1000,
-        "from": "2023-06-02 00:00:00+00:00",
-        "to": "2026-02-25 00:00:00+00:00",
-        "split": {
-          "train": [
-            0,
-            600
-          ],
-          "val": [
-            600,
-            800
-          ],
-          "test": [
-            800,
-            1000
-          ]
-        }
-      },
-      "SOL/USDT": {
-        "train": {
-          "net_return_pct": -9.95,
-          "max_drawdown_pct": -18.3,
-          "win_rate_pct": 50.0,
-          "trade_count": 6,
-          "profit_factor": 0.619
-        },
-        "val": {
-          "net_return_pct": 20.73,
-          "max_drawdown_pct": -14.75,
-          "win_rate_pct": 60.0,
           "trade_count": 5,
-          "profit_factor": 2.067
+          "profit_factor": 0.661
         },
         "test": {
-          "net_return_pct": -11.25,
-          "max_drawdown_pct": -19.75,
-          "win_rate_pct": 0.0,
-          "trade_count": 3,
-          "profit_factor": 0.0
+          "net_return_pct": -1.24,
+          "max_drawdown_pct": -2.85,
+          "win_rate_pct": 16.67,
+          "trade_count": 6,
+          "profit_factor": 0.467
         },
         "bars": 1000,
-        "from": "2023-06-02 00:00:00+00:00",
-        "to": "2026-02-25 00:00:00+00:00",
+        "from": "2026-03-06 23:00:00+00:00",
+        "to": "2026-04-17 14:00:00+00:00",
         "split": {
           "train": [
             0,
@@ -806,27 +476,27 @@
     },
     "aggregate": {
       "train": {
-        "net_return_pct": 1.2,
-        "max_drawdown_pct": -12.98,
-        "win_rate_pct": 46.67,
-        "trade_count": 20,
-        "profit_factor": 1.113
+        "net_return_pct": -4.95,
+        "max_drawdown_pct": -6.29,
+        "win_rate_pct": 22.22,
+        "trade_count": 9,
+        "profit_factor": 0.171
       },
       "val": {
-        "net_return_pct": 12.99,
-        "max_drawdown_pct": -8.7,
-        "win_rate_pct": 70.0,
-        "trade_count": 10,
-        "profit_factor": 334.2
+        "net_return_pct": -0.74,
+        "max_drawdown_pct": -2.26,
+        "win_rate_pct": 40.0,
+        "trade_count": 5,
+        "profit_factor": 0.661
       },
       "test": {
-        "net_return_pct": 3.97,
-        "max_drawdown_pct": -10.39,
-        "win_rate_pct": 41.67,
-        "trade_count": 9,
-        "profit_factor": 10.634
+        "net_return_pct": -1.24,
+        "max_drawdown_pct": -2.85,
+        "win_rate_pct": 16.67,
+        "trade_count": 6,
+        "profit_factor": 0.467
       }
     },
-    "selection_score": 8.7328
+    "selection_score": -12.7279
   }
 }
