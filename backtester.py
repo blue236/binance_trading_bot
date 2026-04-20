@@ -198,12 +198,53 @@ def build_ml_features(df: pd.DataFrame) -> pd.DataFrame:
     return features
 
 
-def label_future_returns(df: pd.DataFrame, holding_period_bars: int, buy_threshold: float, sell_threshold: float) -> pd.Series:
-    """Label buy/hold/sell based on future returns over holding period."""
+def label_future_returns(
+    df: pd.DataFrame,
+    holding_period_bars: int,
+    buy_threshold: float,
+    sell_threshold: float,
+    train_end_idx: int | None = None,
+) -> pd.Series:
+    """Label buy/hold/sell based on future returns over holding period.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Full OHLCV DataFrame (after feature engineering dropna).
+    holding_period_bars : int
+        Number of bars to look forward for the return calculation.
+    buy_threshold : float
+        Minimum positive return to assign a buy label (1).
+    sell_threshold : float
+        Minimum negative return magnitude to assign a sell label (-1).
+    train_end_idx : int | None
+        Exclusive upper bound of the training window (iloc length of the
+        training slice).  When provided, labels for bars at positions
+        ``>= train_end_idx - holding_period_bars`` are set to NaN so
+        that no label ever depends on a price that lies beyond the training
+        boundary.  Pass ``None`` only if you intend to label the full dataset
+        for evaluation purposes; **never** pass ``None`` when the labels will
+        be used for model training.
+
+    Returns
+    -------
+    pd.Series
+        Integer labels {-1, 0, 1} aligned to df.index, with NaN where the
+        look-forward window extends past ``train_end_idx``.
+    """
     future_return = df["close"].shift(-holding_period_bars) / df["close"] - 1.0
-    labels = pd.Series(0, index=df.index)
-    labels[future_return >= buy_threshold] = 1
-    labels[future_return <= -sell_threshold] = -1
+    labels = pd.Series(0, index=df.index, dtype=float)
+    labels[future_return >= buy_threshold] = 1.0
+    labels[future_return <= -sell_threshold] = -1.0
+
+    if train_end_idx is not None:
+        # Mask out any bar whose look-forward window would reach into the test
+        # set.  The last 'holding_period_bars' rows of the training slice have
+        # no valid label because their future return requires prices from the
+        # test window.
+        cutoff_pos = max(0, train_end_idx - holding_period_bars)
+        labels.iloc[cutoff_pos:train_end_idx] = float("nan")
+
     return labels
 
 
@@ -220,7 +261,34 @@ def ml_pattern_backtest(
     slippage: float = 0.0005,
     spread: float = 0.0005,
 ) -> Tuple[float, List[int], List[int], List[float], List[float]]:
-    """ML-based backtest with pattern recognition and trade throttling."""
+    """ML-based backtest with pattern recognition and trade throttling.
+
+    Walk-forward approach (QUANT-02 fix):
+    ------------------------------------
+    1. Features are computed on the full dataset, then rows with NaN features
+       are dropped.
+    2. The dataset is split 70 / 30 by time (no shuffling).
+    3. Training labels are built only for bars whose look-forward window stays
+       entirely within the training window — the last ``holding_period_bars``
+       rows of the training slice are excluded (no look-ahead into test data).
+    4. The model is fitted on the training slice only.
+    5. Predictions and the backtest simulation run exclusively on the test
+       slice, which the model never saw during training.
+
+    This eliminates the B-01 lookahead bias that caused inflated accuracy when
+    ``label_future_returns()`` used ``shift(-N)`` across the full dataset
+    before splitting.
+
+    B-02 slippage fix:
+    ------------------
+    Each trade applies only *one* friction factor per side.  Previously both
+    ``spread / 2`` and ``slippage`` were applied on the same side, effectively
+    double-counting transaction costs.  The ``spread`` parameter is retained in
+    the signature for backward compatibility but the buy/sell prices now use
+    only ``slippage`` as the single per-side friction model:
+        entry:  trade_price = close * (1 + slippage)
+        exit:   trade_price = close * (1 - slippage)
+    """
     try:
         from xgboost import XGBClassifier  # type: ignore
     except ImportError as exc:
@@ -235,25 +303,54 @@ def ml_pattern_backtest(
     sell_amounts: List[float] = []
 
     features = build_ml_features(df)
-    labels = label_future_returns(df, holding_period_bars, buy_threshold, sell_threshold)
 
-    data = features.copy()
-    data["label"] = labels
-    data = data.dropna()
+    # --- Step 1: determine train/test split on the feature-complete rows ----
+    # Drop NaN rows introduced by rolling indicators before splitting so the
+    # split ratio applies to usable rows only.
+    features_clean = features.dropna()
 
-    if data.empty or len(data) < 50:
+    if features_clean.empty or len(features_clean) < 50:
         logger.warning("Not enough data after feature engineering; skipping ML backtest.")
+        return usdt, buy_indices, sell_indices, buy_amounts, sell_amounts
+
+    split_pos = int(len(features_clean) * 0.7)  # positional boundary
+
+    # --- Step 2: build labels WITHOUT lookahead ---------------------------
+    # Only label the training slice.  The last ``holding_period_bars`` rows of
+    # the training window have no valid label because computing their future
+    # return would require prices from the test window.
+    train_features = features_clean.iloc[:split_pos].copy()
+    train_labels = label_future_returns(
+        df.loc[train_features.index],
+        holding_period_bars,
+        buy_threshold,
+        sell_threshold,
+        train_end_idx=len(train_features),
+    )
+
+    train_data = train_features.copy()
+    train_data["label"] = train_labels.reindex(train_features.index)
+    # Drop rows where the label is NaN (the "embargo" zone at the train boundary)
+    train_data = train_data.dropna(subset=["label"])
+
+    if train_data.empty or len(train_data) < 30:
+        logger.warning("Not enough labeled training bars after embargo; skipping ML backtest.")
         return usdt, buy_indices, sell_indices, buy_amounts, sell_amounts
 
     label_map = {-1: 0, 0: 1, 1: 2}
     inv_label_map = {0: -1, 1: 0, 2: 1}
-    y = data["label"].map(label_map)
-    X = data.drop(columns=["label"])
 
-    split_idx = int(len(data) * 0.7)
-    X_train, X_test = X.iloc[:split_idx], X.iloc[split_idx:]
-    y_train, y_test = y.iloc[:split_idx], y.iloc[split_idx:]
+    y_train = train_data["label"].map(label_map)
+    X_train = train_data.drop(columns=["label"])
 
+    # --- Step 3: test slice (model has never seen these rows) ---------------
+    X_test = features_clean.iloc[split_pos:]
+
+    if X_test.empty:
+        logger.warning("Test slice is empty after split; skipping ML backtest.")
+        return usdt, buy_indices, sell_indices, buy_amounts, sell_amounts
+
+    # --- Step 4: train and predict ------------------------------------------
     model = XGBClassifier(
         n_estimators=300,
         max_depth=4,
@@ -270,6 +367,7 @@ def ml_pattern_backtest(
     probs = model.predict_proba(X_test)
     preds = np.argmax(probs, axis=1)
 
+    # --- Step 5: simulate trades on out-of-sample test slice ----------------
     holding_counter = 0
     entry_times: List[pd.Timestamp] = []
     test_indices = X_test.index.tolist()
@@ -289,8 +387,8 @@ def ml_pattern_backtest(
             recent_entries = [t for t in entry_times if timestamp - t <= pd.Timedelta(days=30)]
             if len(recent_entries) < max_trades_per_month:
                 entry_times = recent_entries
-                ask_price = price * (1 + spread / 2)
-                trade_price = ask_price * (1 + slippage)
+                # B-02 fix: apply slippage once per side only (no separate spread adjustment)
+                trade_price = price * (1 + slippage)
                 coins_purchased = (usdt / trade_price) * (1 - fee)
                 if coins_purchased > 0:
                     coins += coins_purchased
@@ -303,8 +401,8 @@ def ml_pattern_backtest(
             force_exit = holding_counter >= holding_period_bars
             model_exit = predicted_label == -1 and sell_prob >= min_trade_confidence
             if force_exit or model_exit:
-                bid_price = price * (1 - spread / 2)
-                trade_price = bid_price * (1 - slippage)
+                # B-02 fix: apply slippage once per side only (no separate spread adjustment)
+                trade_price = price * (1 - slippage)
                 usdt += coins * trade_price * (1 - fee)
                 sell_indices.append(row_idx)
                 sell_amounts.append(coins)
@@ -313,8 +411,8 @@ def ml_pattern_backtest(
 
     if coins > 0:
         final_price = df["close"].iloc[-1]
-        bid_price = final_price * (1 - spread / 2)
-        trade_price = bid_price * (1 - slippage)
+        # B-02 fix: apply slippage once per side only
+        trade_price = final_price * (1 - slippage)
         usdt += coins * trade_price * (1 - fee)
         sell_indices.append(len(df) - 1)
         sell_amounts.append(coins)
@@ -352,9 +450,14 @@ def mean_reversion_backtest(
     fee : float, default 0.001
         Commission fee per trade (e.g., 0.001 = 0.1%). Applied on trade value.
     slippage : float, default 0.0005
-        Slippage factor applied to trade price (e.g., 0.0005 = 0.05%).
+        Slippage factor applied to trade price (e.g., 0.0005 = 0.05%).  This
+        is the single per-side friction model.  ``spread`` is kept in the
+        signature for backward compatibility but is no longer applied
+        separately (see B-02 fix note below).
     spread : float, default 0.0005
-        Bid/ask spread factor; half of this is applied to buy and sell prices.
+        Retained for API compatibility.  Not applied in price calculations
+        (B-02 fix): previously both ``spread / 2`` and ``slippage`` were
+        stacked on the same side, double-counting round-trip costs.
     volatility_threshold : float, default 0.05
         Threshold for volatility (absolute percentage change) to trigger partial position sizing.
     position_split_factor : float, default 0.5
@@ -392,9 +495,9 @@ def mean_reversion_backtest(
                 # Amount of USDT to allocate
                 amount_to_invest = usdt * invest_fraction
                 if amount_to_invest > 0:
-                    # Adjust price for spread and slippage
-                    ask_price = price * (1 + spread / 2)
-                    trade_price = ask_price * (1 + slippage)
+                    # B-02 fix: apply slippage once per side only (spread removed to avoid
+                    # double-counting; slippage already captures the full adverse fill cost)
+                    trade_price = price * (1 + slippage)
                     # Calculate coins purchased, accounting for fees
                     coins_purchased = (amount_to_invest / trade_price) * (1 - fee)
                     coins += coins_purchased
@@ -411,9 +514,8 @@ def mean_reversion_backtest(
                 sell_coins = coins * sell_fraction
                 sell_coins = min(sell_coins, coins)
                 if sell_coins > 0:
-                    # Adjust price for spread and slippage on sell
-                    bid_price = price * (1 - spread / 2)
-                    trade_price = bid_price * (1 - slippage)
+                    # B-02 fix: apply slippage once per side only
+                    trade_price = price * (1 - slippage)
                     usdt += sell_coins * trade_price * (1 - fee)
                     coins -= sell_coins
                     sell_indices.append(i)
@@ -424,8 +526,8 @@ def mean_reversion_backtest(
     # Liquidate any remaining coins at final price
     if coins > 0:
         final_price = prices[-1]
-        bid_price = final_price * (1 - spread / 2)
-        trade_price = bid_price * (1 - slippage)
+        # B-02 fix: apply slippage once per side only
+        trade_price = final_price * (1 - slippage)
         usdt += coins * trade_price * (1 - fee)
         sell_indices.append(len(prices) - 1)
         sell_amounts.append(coins)
@@ -534,8 +636,9 @@ def pivot_reversal_backtest(
                 sell_tranches = 0
             amount_to_invest = min(tranche_budget, usdt)
             if amount_to_invest > 0:
-                ask_price = close.iloc[i] * (1 + spread / 2)
-                trade_price = ask_price * (1 + slippage)
+                # B-02 fix: apply slippage once per side only (spread removed to avoid
+                # double-counting the same friction component twice)
+                trade_price = close.iloc[i] * (1 + slippage)
                 coins_purchased = (amount_to_invest / trade_price) * (1 - fee)
                 coins += coins_purchased
                 usdt -= amount_to_invest
@@ -557,8 +660,8 @@ def pivot_reversal_backtest(
             sell_coins = coins / remaining_tranches
             sell_coins = min(sell_coins, coins)
             if sell_coins > 0:
-                bid_price = close.iloc[i] * (1 - spread / 2)
-                trade_price = bid_price * (1 - slippage)
+                # B-02 fix: apply slippage once per side only
+                trade_price = close.iloc[i] * (1 - slippage)
                 usdt += sell_coins * trade_price * (1 - fee)
                 coins -= sell_coins
                 sell_indices.append(i)
@@ -581,8 +684,8 @@ def pivot_reversal_backtest(
 
     if coins > 0:
         final_price = close.iloc[-1]
-        bid_price = final_price * (1 - spread / 2)
-        trade_price = bid_price * (1 - slippage)
+        # B-02 fix: apply slippage once per side only
+        trade_price = final_price * (1 - slippage)
         usdt += coins * trade_price * (1 - fee)
         sell_indices.append(len(df) - 1)
         sell_amounts.append(coins)

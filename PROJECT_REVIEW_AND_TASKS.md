@@ -641,7 +641,8 @@ Grid covers: `donchian_period` [20,40,80], `ema_fast` [20,50], `regime_rsi_min` 
 
 #### TASK QUANT-02 — Fix ML lookahead bias in `backtester.py`
 **Priority:** HIGH  
-**Files:** `backtester.py` lines 200–323
+**Files:** `backtester.py` lines 200–323  
+**Status:** ✅ COMPLETED 2026-04-18
 
 `ml_pattern_backtest()` trains on future-labeled data (B-01). This produces unrealistically good backtest results.
 
@@ -657,6 +658,12 @@ Grid covers: `donchian_period` [20,40,80], `ema_fast` [20,50], `regime_rsi_min` 
 - No `df["close"].shift(-N)` in feature calculation or label calculation at prediction time.
 - ML backtest metrics realistically lower than current inflated values.
 - Comment in code explaining the cross-validation approach.
+
+**Completed changes:**
+- `label_future_returns()`: added `train_end_idx` parameter; when set, masks NaN labels for the last `holding_period_bars` rows of the training window to prevent any look-forward into test data.
+- `ml_pattern_backtest()`: restructured to (1) split features 70/30 first, (2) call `label_future_returns()` only on the training slice with `train_end_idx` enforced, (3) drop the embargo zone (NaN labels at the train boundary), (4) train model on clean training labels only, (5) simulate trades exclusively on the OOS test slice.  No `shift(-N)` used in label construction.
+- B-02 fix (double-counted slippage): removed the redundant `spread / 2` price adjustment from all three backtest functions (`ml_pattern_backtest`, `mean_reversion_backtest`, `pivot_reversal_backtest`). Each side now applies only a single `slippage` factor — `price * (1 + slippage)` at entry and `price * (1 - slippage)` at exit. The `spread` parameter is retained in all signatures for backward compatibility but is no longer applied in price calculations.
+- All 97 tests pass.
 
 ---
 
@@ -748,7 +755,7 @@ The H_V5 regime filter (EMA200 + RSI daily) may be filtering out valid entries o
 | 🟠 HIGH | TEST-03 Config validation tests | `btb-tester` | 2 hours |
 | 🟠 HIGH | TEST-04 Trade lifecycle integration | `btb-tester` | 4 hours |
 | 🟠 HIGH | TEST-05 Credential fallback tests | `btb-tester` | 2 hours |
-| 🟠 HIGH | QUANT-02 Fix ML lookahead | `btb-quant` | 3 hours |
+| ✅ DONE | QUANT-02 Fix ML lookahead | `btb-quant` | 3 hours |
 | 🟠 HIGH | QUANT-03 Full H_V5 optimization | `btb-quant` | 4 hours |
 | ✅ DONE | DEV-06 CSRF protection | `btb-developer` | 4 hours |
 | ✅ DONE | DEV-07 Chart refresh consistency | `btb-developer` | 3 hours |
