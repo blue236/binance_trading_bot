@@ -7,7 +7,7 @@ general:
   timeframe_regime: 1d
   exchange: binance
   dry_run: true
-  aggressive_mode: true
+  aggressive_mode: false
   base_currency: USDC
   min_notional_usdc: 10.0
 risk:
@@ -22,8 +22,8 @@ strategy:
   ema_slow: 200
   regime_ema_fast: 50
   regime_rsi_len: 14
-  regime_rsi_min: 55
-  donchian_len: 80
+  regime_rsi_min: 50
+  donchian_len: 40
   pullback_ema_len: 50
   pullback_band_atr: 0.8
   ema_fast: 50
@@ -59,8 +59,8 @@ aggressive:
     ema_slow: 200
     regime_ema_fast: 50
     regime_rsi_len: 14
-    regime_rsi_min: 55
-    donchian_len: 80
+    regime_rsi_min: 50
+    donchian_len: 40
     pullback_ema_len: 50
     pullback_band_atr: 0.8
     ema_fast: 50

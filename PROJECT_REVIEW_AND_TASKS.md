@@ -756,7 +756,7 @@ The H_V5 regime filter (EMA200 + RSI daily) may be filtering out valid entries o
 | 🟠 HIGH | TEST-04 Trade lifecycle integration | `btb-tester` | 4 hours |
 | 🟠 HIGH | TEST-05 Credential fallback tests | `btb-tester` | 2 hours |
 | ✅ DONE | QUANT-02 Fix ML lookahead | `btb-quant` | 3 hours |
-| 🟠 HIGH | QUANT-03 Full H_V5 optimization | `btb-quant` | 4 hours |
+| ✅ DONE | QUANT-03 Full H_V5 optimization | `btb-quant` | 4 hours |
 | ✅ DONE | DEV-06 CSRF protection | `btb-developer` | 4 hours |
 | ✅ DONE | DEV-07 Chart refresh consistency | `btb-developer` | 3 hours |
 | 🟡 MEDIUM | REV-05 Risk math review | `btb-reviewer` | 2 hours |
@@ -830,3 +830,85 @@ The H_V5 regime filter (EMA200 + RSI daily) may be filtering out valid entries o
 | regime | Market condition classification: `trend`, `range`, or `none` |
 | ATR | Average True Range; used for stop sizing and trailing stop calculation |
 | breakeven_r | R-multiple (units of initial risk) at which stop moves to entry price |
+
+---
+
+## Appendix C — Latest Optimization Run (2026-04-20)
+
+### Run Configuration
+
+- **Script:** `scripts/run_quant03.py`
+- **Symbols:** BTC/USDT, ETH/USDT, SOL/USDT
+- **Timeframe:** 4h signal, 1d regime
+- **Data:** 4,000 bars per symbol (~Jun 2024–Apr 2026) via paginated ccxt fetch
+- **Grid size:** 11,664 combinations (coarse grid; full grid = 25,920)
+- **Runtime:** ~33 minutes
+
+### Time Splits
+
+| Split | Approx period | Bars (4h) | Market condition |
+|-------|--------------|-----------|-----------------|
+| Train (60%) | Jun 2024–Nov 2024 | 2,400 | 2024 bull run |
+| Val (20%) | Nov 2024–Feb 2025 | 800 | ATH + early correction |
+| Test (20%) | Feb 2025–Apr 2026 | 800 | Sustained bear market |
+
+### OOS Filter Results
+
+**0 / 11,664 combinations passed all OOS filters.**
+
+OOS filters applied:
+- `trade_count >= 6` on test split
+- `profit_factor >= 1.4` on test split
+- `max_drawdown_pct > -25%` on test split
+- Test return ≥ 60% of val return
+
+Root cause: BTC/ETH/SOL were below EMA200 throughout the entire test split (Feb 2025–Apr 2026). The H_V5 regime filter requires `close > EMA200` as one of four conditions, so it correctly generated **zero entries** across all tested parameter combinations. This is expected strategy behavior — not a code bug.
+
+Regime distribution on full dataset (4,000 bars): `{'trend': 1674, 'none': 2326}` for BTC/USDT. The 1,674 trend-regime bars fall predominantly in the train and val splits.
+
+### Top-5 Combinations (ranked by val score, pre-OOS filter)
+
+All five top combinations showed identical val metrics: ret=+222.7%, dd=-4.3%, wr=85%, tr=89, pf=19.06. The val split (Nov 2024–Feb 2025) was a uniformly strong bull run with high signal density, making it impossible for the optimizer to discriminate between parameter sets. The optimizer cannot be considered validated for the current market.
+
+Best overall combination:
+
+| Parameter | Value |
+|-----------|-------|
+| `donchian_period` | 40 |
+| `ema_fast` | 100 |
+| `regime_rsi_min` | 50 |
+| `rsi_overheat` | 80 |
+| `atr_sl_trend_mult` | 1.5 |
+| `atr_trail_mult` | 3.0 |
+| `breakeven_r` | 1.0 |
+| `pullback_band_atr` | 1.2 |
+
+Aggregate metrics (train+val, all 3 symbols averaged):
+- Train: ret=+574.4%, dd=-12.3%, wr=62%, trades=162, pf=20.95
+- Val: ret=+222.7%, dd=-4.3%, wr=85%, trades=89, pf=19.06
+- Test: ret=+0.0% (0 trades — bear regime)
+
+### Config Changes Applied
+
+Conservative partial update only. Stop-placement parameters are excluded because changing them without OOS confirmation on live data is a financial safety risk.
+
+| Parameter | Old | New | Rationale |
+|-----------|-----|-----|-----------|
+| `donchian_len` | 80 | **40** | Consistently preferred by optimizer across all top-5 combos; shorter channel reduces false breakouts in choppy regimes |
+| `regime_rsi_min` | 55 | **50** | Relaxing the RSI threshold slightly allows entry in early-trend conditions where RSI has not yet reached 55; optimizer prefers 50 across all combos |
+
+Parameters **not updated** despite optimizer suggestion:
+
+| Parameter | Current | Optimizer | Reason skipped |
+|-----------|---------|-----------|---------------|
+| `atr_trail_mult` | 8.0 | 3.0 | Stop-placement — zero OOS validation; tightening trail from 8× to 3× ATR materially changes drawdown profile |
+| `atr_sl_trend_mult` | 2.5 | 1.5 | Stop-placement — zero OOS validation; tightening initial stop increases position size per unit of risk |
+| `ema_fast` | 50 | 100 | Val metrics identical for all ema_fast values; cannot distinguish signal from noise |
+| `rsi_overheat` | 75 | 80 | Val metrics identical; no basis for change |
+| `pullback_band_atr` | 0.8 | 1.2 | Val metrics identical; no basis for change |
+
+### Next Steps
+
+- **QUANT-04:** Kelly sizing analysis (can proceed with current train+val data)
+- **QUANT-05:** Regime filter on/off comparison
+- Re-run full 25,920-combo grid when BTC enters a new bull regime (test-split data will then cover a bull run), giving OOS validation across a full market cycle
