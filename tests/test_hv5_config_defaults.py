@@ -15,8 +15,8 @@ class TestHV5ConfigDefaults(unittest.TestCase):
 
         self.assertEqual(st.get("mode"), "h_v5_b_plus_breakeven_ema100")
         self.assertEqual(ag_st.get("mode"), "h_v5_b_plus_breakeven_ema100")
-        self.assertEqual(int(st.get("donchian_len")), 80)
-        self.assertEqual(int(ag_st.get("donchian_len")), 80)
+        self.assertEqual(int(st.get("donchian_len")), 40)
+        self.assertEqual(int(ag_st.get("donchian_len")), 40)
         self.assertEqual(float(ag_st.get("atr_trail_mult")), 8.0)
 
     def test_structural_exit_timeframe_defaults_to_daily(self):
