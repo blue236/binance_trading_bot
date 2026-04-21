@@ -143,6 +143,27 @@ Current value:
 
 These values drive the signal engine in [`main.py`](/home/blue236/.openclaw/workspace/binance_trading_bot/main.py).
 
+### `strategy.regime_mode`
+
+Controls which conditions the daily regime filter applies before allowing an entry.
+Only has effect when `strategy.mode` is `h_v5_b_plus_breakeven_ema100`.
+
+| Value | Conditions | Trade-offs |
+|---|---|---|
+| `strict_4and` | close > EMA200 AND EMA200 slope > 0 AND EMA50 > EMA200 AND RSI >= `regime_rsi_min` | Most conservative; QUANT-06 val PF 0.85. Default for new deployments. |
+| `price_only` | close > EMA200 only | Recommended by QUANT-06 (val PF 3.78); skips EMA50, slope, and RSI computation. |
+| `none` | No filter — always returns `"trend"` | Maximum entries; skips all indicator computation including the OHLCV fetch. |
+
+Default: `strict_4and` (backward compatible — configs without this key behave as before).
+
+Current value in `config.yaml`:
+
+- `price_only`
+
+Current value in `config.template.yaml`:
+
+- `strict_4and`
+
 ### `strategy.adx_len`
 
 ADX lookback period.

@@ -15,6 +15,7 @@ risk:
   cooldown_hours: 8
 strategy:
   mode: h_v5_b_plus_breakeven_ema100
+  regime_mode: strict_4and
   adx_len: 14
   trend_adx_threshold: 20
   ema_slow: 200
