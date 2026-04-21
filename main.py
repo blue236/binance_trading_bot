@@ -836,23 +836,51 @@ def regime_filter(exchange, symbol, cfg):
     tf = cfg["general"]["timeframe_regime"]
     st = cfg.get("strategy", {})
     mode = str(st.get("mode", "legacy_hybrid")).lower()
+    regime_mode = str(st.get("regime_mode", "strict_4and")).lower()
+    _VALID_REGIME_MODES = {"strict_4and", "price_only", "none"}
+    if mode == "h_v5_b_plus_breakeven_ema100" and regime_mode not in _VALID_REGIME_MODES:
+        logger.warning("Unknown regime_mode=%r, falling back to strict_4and", regime_mode)
+        regime_mode = "strict_4and"
+
+    if mode == "h_v5_b_plus_breakeven_ema100" and regime_mode == "none":
+        logger.debug("Regime[V5] %s: regime_mode=none -> trend", symbol)
+        return "trend", float("nan")
 
     d = fetch_ohlc(exchange, symbol, tf, 400, cfg=cfg, logger=logger)
 
     if mode == "h_v5_b_plus_breakeven_ema100":
         ema_slow_len = int(st.get("ema_slow", 200))
+        ema200 = EMAIndicator(d["c"], ema_slow_len).ema_indicator()
+
+        if regime_mode == "price_only":
+            is_trend = bool(d["c"].iloc[-1] > ema200.iloc[-1])
+            logger.debug(
+                "Regime[V5] %s: regime_mode=price_only close=%.6f ema200=%.6f -> %s",
+                symbol,
+                float(d["c"].iloc[-1]),
+                float(ema200.iloc[-1]),
+                "trend" if is_trend else "none",
+            )
+            return ("trend" if is_trend else "none"), float("nan")
+
+        # strict_4and (default): all 4 conditions must hold
         regime_fast_len = int(st.get("regime_ema_fast", 50))
         regime_rsi_len = int(st.get("regime_rsi_len", 14))
         regime_rsi_min = float(st.get("regime_rsi_min", 55))
 
-        ema200 = EMAIndicator(d["c"], ema_slow_len).ema_indicator()
         ema50 = EMAIndicator(d["c"], regime_fast_len).ema_indicator()
         rsi_d = RSIIndicator(d["c"], regime_rsi_len).rsi()
         slope_pos = (ema200.diff().iloc[-1] > 0)
-        is_trend = bool((d["c"].iloc[-1] > ema200.iloc[-1]) and slope_pos and (ema50.iloc[-1] > ema200.iloc[-1]) and (rsi_d.iloc[-1] >= regime_rsi_min))
+        is_trend = bool(
+            (d["c"].iloc[-1] > ema200.iloc[-1])
+            and slope_pos
+            and (ema50.iloc[-1] > ema200.iloc[-1])
+            and (rsi_d.iloc[-1] >= regime_rsi_min)
+        )
         logger.debug(
-            "Regime[V5] %s: close=%.6f ema200=%.6f ema50=%.6f slope_pos=%s rsi_d=%.2f>=%.2f -> %s",
+            "Regime[V5] %s: regime_mode=%s close=%.6f ema200=%.6f ema50=%.6f slope_pos=%s rsi_d=%.2f>=%.2f -> %s",
             symbol,
+            regime_mode,
             float(d["c"].iloc[-1]),
             float(ema200.iloc[-1]),
             float(ema50.iloc[-1]),
