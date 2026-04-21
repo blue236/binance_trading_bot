@@ -13,3 +13,5 @@ __pycache__/
 .web_tg_offset
 datasheets/
 plots/
+reports/H_V5_ROI_REVIEW_*.md
+scripts/run_roi_review.py
